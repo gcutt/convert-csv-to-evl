@@ -1,16 +1,8 @@
-## convert-csv-to-evl\scripts\convert-csv-to-evl.py
-"""
-convert-csv-to-evl.py
-    Prompts user to Enter path to input CSV file
-    Converts processed glider data
-
-"""
+## 
 
 import sys
 from pathlib import Path
 from datetime import timedelta
-
-from src.preprocess import add_time_utc_to_csv
 
 # Add project root to sys.path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -21,10 +13,6 @@ from src.utils import parse_offset_string
 def main():
     input_csv = input("📄 Enter path to input CSV file: ").strip()
     output_evl = input("📁 Enter path to output EVL file: ").strip()
-
-    print("⏳ Preprocessing CSV (adding time_utc)...")
-    input_csv = add_time_utc_to_csv(input_csv)
-
     offset_str = input("⏱️ Enter time offset [+/-hh:mm:ss] (e.g. +07:00:00): ").strip()
     mode = input("🎛️ Choose mode [depth | vertical_state]: ").strip().lower()
 
@@ -59,11 +47,6 @@ def main():
         except ValueError:
             print("⚠️ Invalid multiplier. Using 1.0.")
             depth_multiplier = 1.0
-
-
-    #
-    print("⏳ Preprocessing CSV (adding time_utc)...")
-    input_csv = add_time_utc_to_csv(input_csv)
 
     evl_lines = convert_csv_to_evl(
         csv_path=input_csv,
