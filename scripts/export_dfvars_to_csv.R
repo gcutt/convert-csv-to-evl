@@ -43,6 +43,8 @@ vars_to_keep <- c(
   "m_gps_lat.lat",
   "m_gps_lon.lon",
   "m_depth.m",
+  "m_pitch.rad",
+  "m_roll.rad",
   "sci_water_pressure.bar",
   "c_ek80_on.sec",
   "salinity_drv.psu",
@@ -52,7 +54,7 @@ vars_to_keep <- c(
 
 df_sub <- df[, vars_to_keep, drop = FALSE]
 
-write.csv(df_sub, "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\RAW\\Glider\\Processed\\glider_depth.csv", row.names=FALSE)
+write.csv(df_sub, "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\RAW\\Glider\\Processed\\gliderdepth_pr.csv", row.names=FALSE)
 
 
 # 
