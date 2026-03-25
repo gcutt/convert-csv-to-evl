@@ -1,0 +1,129 @@
+## convert-csv-to-evl\scripts\convert-csv-to-evl.py
+"""
+convert-csv-to-evl.py
+    Prompts user to Enter path to input CSV file
+    Converts processed glider data
+
+"""
+
+import sys
+from pathlib import Path
+from datetime import timedelta
+
+from src.preprocess import add_time_utc_to_csv
+
+# Add project root to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from src.converter import convert_csv_to_evl
+from src.utils import parse_offset_string
+
+def main():
+    input_csv = input("📄 Enter path to input CSV file: ").strip()
+    output_evl = input("📁 Enter path to output EVL file: ").strip()
+
+    print("⏳ Preprocessing CSV (adding time_utc)...")
+    input_csv = add_time_utc_to_csv(input_csv)
+
+    offset_str = input("⏱️ Enter time offset [+/-hh:mm:ss] (e.g. +07:00:00): ").strip()
+
+    import csv
+
+    def choose_variable(csv_path: str) -> str:
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+
+        print("\n📊 Available variables:")
+        for i, h in enumerate(headers):
+            print(f"{i + 1:2d}: {h}")
+
+        choice = input("\n🔢 Enter number of variable to export: ").strip()
+        try:
+            idx = int(choice) - 1
+            return headers[idx]
+        except Exception:
+            raise ValueError("Invalid selection")
+
+    # def resolve_mode(user_input: str) -> str:
+    #     user_input = user_input.strip().lower()
+    #     if "depth".startswith(user_input):
+    #         return "depth"
+    #     elif "vertical_state".startswith(user_input):
+    #         return "vertical_state"
+    #     else:
+    #         print("⚠️ Invalid mode. Defaulting to 'depth'.")
+    #         return "depth"
+    #
+    # mode_input = input("🎛️ Choose mode [depth | vertical_state]: ")
+    # mode = resolve_mode(mode_input)
+    #
+
+    try:
+        offset = parse_offset_string(offset_str)
+    except ValueError as e:
+        print(f"⚠️ {e}. Using no offset.")
+        offset = timedelta()
+
+    ##
+    # value_col = choose_variable(input_csv)
+    #
+    # ##
+    # depth_multiplier = 1.0
+    # if mode == "depth":
+    #     multiplier_str = input("📐 Enter depth multiplier (e.g. -10.0): ").strip()
+    #     try:
+    #         depth_multiplier = float(multiplier_str)
+    #     except ValueError:
+    #         print("⚠️ Invalid multiplier. Using 1.0.")
+    #         depth_multiplier = 1.0
+
+    ##
+    # User chooses which column to export
+    value_col = choose_variable(input_csv)
+
+    # Determine whether this variable is a depth variable
+    is_depth = (
+            "depth" in value_col.lower() or
+            "pressure" in value_col.lower() or
+            value_col.lower().startswith("m_depth")
+    )
+
+    depth_multiplier = 1.0
+    if is_depth:
+        multiplier_str = input("📐 Enter depth multiplier (e.g. -10.0): ").strip()
+        try:
+            depth_multiplier = float(multiplier_str)
+        except ValueError:
+            print("⚠️ Invalid multiplier. Using 1.0.")
+            depth_multiplier = 1.0
+
+    #
+    print("⏳ Preprocessing CSV (adding time_utc)...")
+    input_csv = add_time_utc_to_csv(input_csv)
+
+    # evl_lines = convert_csv_to_evl(
+    #     csv_path=input_csv,
+    #     offset=offset,
+    #     depth_multiplier=depth_multiplier,
+    #     mode=mode
+    # )
+
+    evl_lines = convert_csv_to_evl(
+        csv_path=input_csv,
+        offset=offset,
+        value_col=value_col
+    )
+
+    with open(output_evl, "w", newline="") as f:
+        for line in evl_lines:
+            f.write(line + "\r\n")
+
+    print(f"\n✅ EVL file written to {output_evl}")
+    print(f"   Mode: {mode}")
+    print(f"   Offset: {offset}")
+    if mode == "depth":
+        print(f"   Depth scaled by: {depth_multiplier}")
+
+if __name__ == "__main__":
+    main()

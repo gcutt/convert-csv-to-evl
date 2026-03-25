@@ -1,8 +1,11 @@
+# src/converter.py
+
 import csv
 import re
-from datetime import timedelta
+from src.utils import parse_utc_to_evl_format
+from datetime import datetime, timedelta
 
-from src.utils import parse_utc_to_evl_format  # if you want to use it instead of manual split
+# from src.utils import parse_utc_to_evl_format, resolve_column
 
 EVL_HEADER = "EVBD 3 3.00.41"
 MISSING_DEPTH = -10000.99000
@@ -23,41 +26,56 @@ def resolve_column(headers: list[str], candidates: list[str], pattern: str | Non
     raise ValueError(f"No matching column found for pattern: {pattern or candidates}")
 
 
+# def convert_csv_to_evl(
+#     csv_path: str,
+#     offset: timedelta = timedelta(),
+#     depth_multiplier: float = 1.0,
+#     mode: str = "depth"
+# ) -> list[str]:
+
 def convert_csv_to_evl(
-    csv_path: str,
-    offset: timedelta = timedelta(),
-    depth_multiplier: float = 1.0,
-    value_col: str | None = None,
+        csv_path: str,
+        offset: timedelta = timedelta(),
+        depth_multiplier: float = 1.0,
+        value_col: str = None
 ) -> list[str]:
 
-    if value_col is None:
-        raise ValueError("value_col must be provided.")
-
-    evl_lines: list[str] = []
-
-    with open(csv_path, newline="") as f:
+    evl_lines = []
+    with open(csv_path, newline='') as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
 
-        # Resolve time column
+        # time_col = resolve_column(headers, ["GMT_Time"], ["time_gmt"], r"UTC.?time")
+        # time_col = resolve_column(headers, ["GMT_Time", "time_gmt"], r"UTC.?time")
         time_col = resolve_column(headers, ["time_utc"])
 
-        # Ensure selected value column exists
+        # if mode == "depth":
+        #     value_col = resolve_column(headers, ["m_depth.m","depth_m", "depth", "pressure_bar", "pressure_dbar", "pressure"])
+        #     print(f"MODE: depth, value_col: {value_col}")
+        # elif mode == "vertical_state":
+        #     value_col = resolve_column(headers, ["vertical_state"], r"vertical.?state")
+        # else:
+        #     raise ValueError(f"Unsupported mode: {mode}")
+
         if value_col not in headers:
             raise ValueError(f"Selected column '{value_col}' not found in CSV headers.")
 
         for row in reader:
-            # If you prefer the helper:
             # date, time = parse_utc_to_evl_format(row[time_col], offset)
-            # Otherwise, keep your manual split:
             date_str, time_str = row[time_col].split()
             date = date_str
             time = time_str + "0000"  # EVL requires HHMMSS + 4-digit microseconds
 
             value_str = row[value_col].strip()
 
-            # Special case: vertical_state
-            if value_col.lower() == "vertical_state":
+            if mode == "depth":
+                try:
+                    depth = float(value_str) * depth_multiplier
+                    status = 3
+                except ValueError:
+                    depth = MISSING_DEPTH
+                    status = 0
+            else:  # vertical_state mode
                 if value_str.lower() == "descent":
                     depth = -1
                     status = 3
@@ -68,15 +86,7 @@ def convert_csv_to_evl(
                     depth = MISSING_DEPTH
                     status = 0
 
-            else:
-                # Generic numeric variable (depth, pressure, pitch, roll, temp, etc.)
-                try:
-                    depth = float(value_str) * depth_multiplier
-                    status = 3
-                except ValueError:
-                    depth = MISSING_DEPTH
-                    status = 0
-
             evl_lines.append(f"{date} {time} {depth:.5f} {status}")
 
     return [EVL_HEADER, str(len(evl_lines))] + evl_lines
+
