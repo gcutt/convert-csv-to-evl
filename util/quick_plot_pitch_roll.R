@@ -3,7 +3,7 @@
 rm(list = ls(all = TRUE))
 
 # Open RData file with df "glider_data" 
-load( "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue.RData" )
+load( "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction0.RData" )
 
 ## This writes everything to csv 
 # # write.csv(glider_data, "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\RAW\\Glider\\Processed\\glider_data.csv", row.names=FALSE)

@@ -23,11 +23,12 @@
 rm(list = ls(all = TRUE))
 
 # --- Options ---
-VERBOSE       = FALSE 
-DEBUGGING     = TRUE
-WRITE_RDATA   = TRUE
-WRITE_CSV     = FALSE
-OPTIONS_PLOT  = TRUE 
+VERBOSE                = FALSE 
+DEBUGGING              =      TRUE
+WRITE_RDATA            =      TRUE
+WRITE_CSV              = FALSE
+OPTIONS_PLOT           =      TRUE 
+OPTIONS_MERGESHORTRUNS = FALSE 
 
 # ---------- Libraries ----------
 library(readr)
@@ -44,7 +45,7 @@ INPATH  <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processe
 
 OUTPATH_RDATA <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction0.RData"
 
-OUTPATH_CSV <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction.csv"
+OUTPATH_CSV <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction0.csv"
 
 
 # --- Load RData file with df "glider_data" ---
@@ -102,7 +103,8 @@ data.frame(index = seq_along(df), name = names(df))
 # min_run_sec:
 #   Minimum duration of an ascent/descent segment to keep.
 #   Shorter runs are treated as noise or brief reversals and removed.
-min_depth_ok   <- 3
+# min_depth_ok   <- 3
+min_depth_ok   <- 2
 slope_thr_mps  <- 0.01
 smooth_win_sec <- 120
 min_run_sec    <- 120
@@ -162,54 +164,73 @@ df <- df %>%
   )
 
 
-# ---------- Helper function: remove short ascent/descent runs ----------
-# This function cleans the raw direction series by:
-# 1. converting very short ascent/descent runs to neutral
-# 2. filling those neutral gaps using neighboring values
-#
-# This helps remove brief reversals or noisy transitions that do
-# not represent a real climb or dive segment.
-merge_short_runs_clear <- function(x, minlen){
-  r <- rle(x)
-  
-  # Step 1: mark short non-zero runs as neutral
-  short_idx <- which(r$values != 0L & r$lengths < minlen)
-  r$values[short_idx] <- 0L
-  v <- inverse.rle(r)
-  
-  # Step 2: absorb neutral gaps into neighboring segments
-  for(i in seq_along(v)){
-    if (v[i] == 0L && i > 1L) v[i] <- v[i - 1L]
+if( OPTIONS_MERGESHORTRUNS ){
+  # ---------- Helper function: remove short ascent/descent runs ----------
+  # This function cleans the raw direction series by:
+  # 1. converting very short ascent/descent runs to neutral
+  # 2. filling those neutral gaps using neighboring values
+  #
+  # This helps remove brief reversals or noisy transitions that do
+  # not represent a real climb or dive segment.
+  merge_short_runs_clear <- function(x, minlen){
+    r <- rle(x)
+    
+    # Step 1: mark short non-zero runs as neutral
+    short_idx <- which(r$values != 0L & r$lengths < minlen)
+    r$values[short_idx] <- 0L
+    v <- inverse.rle(r)
+    
+    # Step 2: absorb neutral gaps into neighboring segments
+    for(i in seq_along(v)){
+      if (v[i] == 0L && i > 1L) v[i] <- v[i - 1L]
+    }
+    for(i in seq_along(v)){
+      j <- length(v) - i + 1L
+      if (v[j] == 0L && j < length(v)) v[j] <- v[j + 1L]
+    }
+    
+    v
   }
-  for(i in seq_along(v)){
-    j <- length(v) - i + 1L
-    if (v[j] == 0L && j < length(v)) v[j] <- v[j + 1L]
-  }
   
-  v
+  # Apply the cleaning step to the raw direction series
+  df$dir <- merge_short_runs_clear(df$dir_raw, min_run_pts)
+
+  
+  # ---------- Assign profile IDs ----------
+  # A new profile_id is assigned whenever the cleaned direction changes.
+  # This means profile_id is a derived segment label based on ascent,
+  # descent, and neutral intervals.
+  chg <- c(FALSE, diff(df$dir) != 0L)
+  df$profile_id <- cumsum(ifelse(chg, 1L, 0L)) + 1L
+  
+  
+  
+  # ---------- Add readable vertical-state labels ----------
+  df <- df %>%
+    mutate(
+      vertical_state = case_when(
+        dir ==  1L ~ "descent",
+        dir == -1L ~ "ascent",
+        TRUE       ~ "neutral"
+      )
+    )
+  
+} else {
+  
+  # ---------- Add readable vertical-state labels ----------
+  df <- df %>%
+    mutate(
+      vertical_state = case_when(
+        dir_raw ==  1L ~ "descent",
+        dir_raw == -1L ~ "ascent",
+        TRUE       ~ "neutral"
+      )
+    )
+  
+  df$dir = df$dir_raw
 }
 
-# Apply the cleaning step to the raw direction series
-df$dir <- merge_short_runs_clear(df$dir_raw, min_run_pts)
 
-# ---------- Assign profile IDs ----------
-# A new profile_id is assigned whenever the cleaned direction changes.
-# This means profile_id is a derived segment label based on ascent,
-# descent, and neutral intervals.
-chg <- c(FALSE, diff(df$dir) != 0L)
-df$profile_id <- cumsum(ifelse(chg, 1L, 0L)) + 1L
-
-
-
-# ---------- Add readable vertical-state labels ----------
-df <- df %>%
-  mutate(
-    vertical_state = case_when(
-      dir ==  1L ~ "descent",
-      dir == -1L ~ "ascent",
-      TRUE       ~ "neutral"
-    )
-  )
 
 # seg <- df %>%
 #   filter(

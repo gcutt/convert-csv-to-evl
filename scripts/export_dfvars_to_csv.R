@@ -2,32 +2,109 @@
 
 rm(list = ls(all = TRUE))
 
-# First, open RData file with df "glider_data" 
-load( "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction2.RData" )
+#
+library(dplyr)
+library(ggplot2)
 
-## Examine data
-table( df$dir_num )
+# 
+OPTIONS_PLOT = TRUE
 
-var1 = "directions"
-var2 = "dir_num"
-df %>%
-  count(!!sym(var1), !!sym(var2)) %>%
-  tidyr::pivot_wider(
-    names_from  = !!sym(var2),
-    values_from = n,
-    values_fill = 0
-  )
+# First, load RData file with df, glider_data 
+INPATH = "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction0.RData" 
+load( INPATH )
 
-var1 = "directions"
-var2 = "inflect_loc"
-df %>%
-  count(!!sym(var1), !!sym(var2)) %>%
-  tidyr::pivot_wider(
-    names_from  = !!sym(var2),
-    values_from = n,
-    values_fill = 0
-  )
+# ## Examine data
+# table( df$dir_num )
+# 
+# var1 = "directions"
+# var2 = "dir_num"
+# df %>%
+#   count(!!sym(var1), !!sym(var2)) %>%
+#   tidyr::pivot_wider(
+#     names_from  = !!sym(var2),
+#     values_from = n,
+#     values_fill = 0
+#   )
+# 
+# var1 = "directions"
+# var2 = "inflect_loc"
+# df %>%
+#   count(!!sym(var1), !!sym(var2)) %>%
+#   tidyr::pivot_wider(
+#     names_from  = !!sym(var2),
+#     values_from = n,
+#     values_fill = 0
+#   )
+# 
+# var1 = "inflect_bool"
+# var2 = "dir_num"
+# df %>%
+#   count(!!sym(var1), !!sym(var2)) %>%
+#   tidyr::pivot_wider(
+#     names_from  = !!sym(var2),
+#     values_from = n,
+#     values_fill = 0
+#   )
+# 
+# ## Reassign dir_num to zero where inflection=TRUE
+# df$dir_num[df$inflect_bool] <- 0
+# 
+# df %>%
+#   count(inflect_bool, dir_num) %>%
+#   tidyr::pivot_wider(
+#     names_from = dir_num,
+#     values_from = n,
+#     values_fill = 0
+#   )
 
+
+if (OPTIONS_PLOT) {
+  
+  ## random sample but keep all dir_num==0
+  # set.seed(123)
+  # df_small <- bind_rows(
+  #   df %>% filter(dir_num == 0),                 # keep all turning points
+  #   df %>% filter(dir_num != 0) %>% slice_sample(prop = 0.05)   # sample 1% of others
+  # )
+  
+  thin_factor <- 50   # keep every 50th non-zero row
+  df_small <- df %>%
+    mutate(row_id = row_number()) %>%
+    filter( row_id %% thin_factor == 0) %>%
+    select(-row_id )
+  
+  depth_col = "m_depth.m"
+  
+  ggplot( df_small , aes(x = g_utc_time, y = .data[[depth_col]])) +
+    geom_point(aes(color = factor(dir_raw)), size = 0.9, alpha = 0.8) +
+    # geom_point(
+    #   data = df_small %>% filter(inflect_bool),
+    #   aes(x = g_utc_time, y = .data[[depth_col]]),
+    #   color = "black", fill = "yellow", shape = 21, size = 2
+    # ) +
+    scale_y_reverse() +
+    scale_color_manual(
+      values = c(
+        `-1` = "black",      # ascent
+        `0`  = "grey70",   # neutral
+        `1`  = "cyan"     # descent
+      ),
+      breaks = c(-1, 0, 1),
+      labels = c("Ascent", "Neutral", "Descent"),
+      name   = "Direction",
+      na.value = "red"      # <-- this handles NA points
+    ) +
+    theme_minimal()
+}
+
+
+df$dir = df$dir_raw
+save(df, file = INPATH )
+
+
+
+
+#-------------------------------------
 ## OPTIONS
 doExportFulldf = FALSE 
 

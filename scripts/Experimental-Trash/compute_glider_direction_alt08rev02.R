@@ -32,7 +32,7 @@ DEBUGGING      =      TRUE
 WRITE_RDATA    =      TRUE
 WRITE_CSV      = FALSE
 OPTIONS_PLOT   = FALSE 
-OPTIONS_SUBSET =      TRUE 
+OPTIONS_SUBSET = FALSE #     TRUE 
 
 # ---------- Libraries ----------
 library(readr)
@@ -47,7 +47,7 @@ library(ggplot2)
 
 INPATH  <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue.RData"
 
-OUTPATH_RDATA <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction2.RData"
+OUTPATH_RDATA <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction.RData"
 
 OUTPATH_CSV <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction.csv"
 
@@ -336,6 +336,9 @@ if (length(tp_idx) >= 2) {
 df$dir_num <- dplyr::case_when(
   df$directions == "inflection" & df$dir_num %in% c(-1, 1) ~ 2,
   TRUE ~ df$dir_num
+  
+## Reassign dir_num to zero where inflection=TRUE
+df$dir_num[df$inflect_bool] <- 0
 )
 
 
