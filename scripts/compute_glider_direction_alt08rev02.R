@@ -47,7 +47,7 @@ library(ggplot2)
 
 INPATH  <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue.RData"
 
-OUTPATH_RDATA <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction.RData"
+OUTPATH_RDATA <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction2.RData"
 
 OUTPATH_CSV <- "D:\\Cutter\\0-PROJECTS\\UDEL\\DATA\\2025-NightBlue\\Glider\\Processed\\Ud_orris_Night-Blue+direction.csv"
 
@@ -159,7 +159,7 @@ if( OPTIONS_SUBSET ){
   subexper <- df %>%
     filter(
       .data[[time_col]] >= as.POSIXct("2025-08-15 00:00:00", tz = "UTC"),
-      .data[[time_col]] <= as.POSIXct("2025-09-08 23:00:00", tz = "UTC")
+      .data[[time_col]] <= as.POSIXct("2025-09-07 01:00:00", tz = "UTC")
     )
   
   df0 = df 
@@ -199,7 +199,7 @@ enforce_majority_direction <- function(cls, inf_zones) {
   # Add artificial boundaries at start and end
   bounds <- c(1, inf_zones$start, inf_zones$end, n)
 
-  # Build intervals between inflections
+  # Build intervals between directions
   # Intervals are: (end_of_inf_i) : (start_of_inf_(i+1))
   for (i in seq_len(nrow(inf_zones) + 1)) {
 
@@ -240,16 +240,16 @@ enforce_majority_direction <- function(cls, inf_zones) {
 
 #-------------------------
 # 1. classify inflection zones
-df$inflections <- classify_inflections( df[[depth_col]], win_pts )
-table(df$inflections)
+df$directions <- classify_inflections( df[[depth_col]], win_pts )
+table(df$directions)
 map <- c("up" = 1, "inflection" = 0, "down" = -1)
-df$inflectnum <- unname(map[as.character(df$inflections)])
+df$dir_num <- unname(map[as.character(df$directions)])
 
 
 ## NEW NEW
 # 2. detect neutral runs
 # --- Identify contiguous neutral runs safely ---
-is_neutral <- df$inflectnum == 0
+is_neutral <- df$dir_num == 0
 
 r <- rle(is_neutral)
 ends   <- cumsum(r$lengths)
@@ -326,23 +326,23 @@ if (length(tp_idx) >= 2) {
     }
     
     # Apply only to neutral points
-    neutral_idx <- which(df$inflectnum[s:e] == 0) + (s - 1)
+    neutral_idx <- which(df$dir_num[s:e] == 0) + (s - 1)
     
-    df$inflectnum[neutral_idx] <- seg_dir
+    df$dir_num[neutral_idx] <- seg_dir
   }
 }
 
 # 5. recode overwritten inflection points
-df$inflectnum <- dplyr::case_when(
-  df$inflections == "inflection" & df$inflectnum %in% c(-1, 1) ~ 2,
-  TRUE ~ df$inflectnum
+df$dir_num <- dplyr::case_when(
+  df$directions == "inflection" & df$dir_num %in% c(-1, 1) ~ 2,
+  TRUE ~ df$dir_num
 )
 
 
 if( OPTIONS_PLOT ){
   ## PLOT turning points 
   ggplot(df, aes(x = g_utc_time, y = .data[[depth_col]])) +
-    geom_point(aes(color = factor(inflectnum)), size = 0.6, alpha = 0.8) +
+    geom_point(aes(color = factor(dir_num)), size = 0.6, alpha = 0.8) +
     geom_point(
       data = df %>% filter(inflect_bool),
       aes(x = g_utc_time, y = .data[[depth_col]]),
@@ -356,7 +356,7 @@ if( OPTIONS_PLOT ){
 
 if (OPTIONS_PLOT) {
   ggplot(df, aes(x = g_utc_time, y = .data[[depth_col]])) +
-    geom_point(aes(color = factor(inflectnum)), size = 0.9, alpha = 0.8) +
+    geom_point(aes(color = factor(dir_num)), size = 0.9, alpha = 0.8) +
     geom_point(
       data = df %>% filter(inflect_bool),
       aes(x = g_utc_time, y = .data[[depth_col]]),
@@ -377,10 +377,35 @@ if (OPTIONS_PLOT) {
     theme_minimal()
 }
 
+if (OPTIONS_PLOT) {
+  ggplot(df, aes(x = g_utc_time, y = .data[[depth_col]])) +
+    geom_point(aes(color = factor(dir_num)), size = 0.9, alpha = 0.8) +
+    geom_point(
+      data = df %>% filter(inflect_bool),
+      aes(x = g_utc_time, y = .data[[depth_col]]),
+      color = "black", fill = "yellow", shape = 21, size = 2
+    ) +
+    scale_y_reverse() +
+    scale_color_manual(
+      values = c(
+        `-1` = "black",      # ascent
+        `0`  = "grey70",   # neutral
+        `1`  = "cyan" ,    # descent
+        `2`  = "red"   
+      ),
+      breaks = c(-1, 0, 1, 2),
+      labels = c("Ascent", "Neutral", "Descent", "nearinflection"),
+      name   = "Direction",
+      na.value = "green"      # <-- this handles NA points
+    ) +
+    theme_minimal()
+}
+
+
 
 if (OPTIONS_PLOT) {
   ggplot(df, aes(x = g_utc_time, y = .data[[depth_col]])) +
-    geom_point(aes(color = factor(inflectnum)), size = 0.9, alpha = 0.8) +
+    geom_point(aes(color = factor(dir_num)), size = 0.9, alpha = 0.8) +
     geom_point(
       data = df %>% filter(inflect_bool),
       aes(x = g_utc_time, y = .data[[depth_col]]),
@@ -409,7 +434,7 @@ if (OPTIONS_PLOT) {
 ## Original Plot
   if( FALSE ){
     # dir
-    ggplot(df, aes(x = .data[["g_utc_time"]], y = .data[[depth_col]], color = factor(inflectnum))) +
+    ggplot(df, aes(x = .data[["g_utc_time"]], y = .data[[depth_col]], color = factor(dir_num))) +
       geom_point(size = 0.6, alpha = 0.8) +
       scale_y_reverse() +
       scale_color_manual(
