@@ -3,19 +3,31 @@ import os
 import json
 from collections import Counter
 from datetime import datetime
+import re
+import struct
+import xml.etree.ElementTree as ET
+
+
+##
+OPTIONS_INSPECTBIN = False
 
 
 # ============================================================
 # 1. STREAM XML PACKETS UNTIL BINARY APPEARS
 # ============================================================
 
-import re
-import struct
-import xml.etree.ElementTree as ET
-
 BEAM_TAG_RE = re.compile(br'<BeamAngles[^>]*>')
 PACKET_START_RE = re.compile(br'<Packet\b')
 PACKET_END_RE = re.compile(br'</Packet>')
+
+
+##
+def count_pingdata_blocks(evd_path):
+    with open(evd_path, "rb") as f:
+        data = f.read()
+    # Count all <PingData ...> tags
+    return len(re.findall(br'<PingData\b', data))
+
 
 def iter_xml_packets_binary_aware(evd_path):
     with open(evd_path, "rb") as f:
@@ -139,24 +151,42 @@ def extract_time_bounds(packets):
     duration = (t_max - t_min).total_seconds()
     return t_min, t_max, duration
 
-
 def build_navigation_series(packets):
-    """
-    Navigation = Position packet lat/lon + Roll/Pitch timestamps.
-    """
-    pos = next((p for p in packets if p["type"] == "Position"), None)
-    if not pos:
-        return []
-
-    lat = float(pos["attrs"]["Latitude"])
-    lon = float(pos["attrs"]["Longitude"])
-
     nav = []
     for p in packets:
-        if p["type"] in ("Roll", "Pitch") and p["time"]:
-            nav.append((p["time"], lat, lon))
-
+        if p["type"] != "Position":
+            continue
+        t = p["time"]
+        attrs = p["attrs"]
+        lat = attrs.get("Latitude")
+        lon = attrs.get("Longitude")
+        if t is None or lat is None or lon is None:
+            continue
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except ValueError:
+            continue
+        nav.append((t, lat, lon))
     return nav
+
+# def build_navigation_series(packets):
+#     """
+#     Navigation = Position packet lat/lon + Roll/Pitch timestamps.
+#     """
+#     pos = next((p for p in packets if p["type"] == "Position"), None)
+#     if not pos:
+#         return []
+#
+#     lat = float(pos["attrs"]["Latitude"])
+#     lon = float(pos["attrs"]["Longitude"])
+#
+#     nav = []
+#     for p in packets:
+#         if p["type"] in ("Roll", "Pitch") and p["time"]:
+#             nav.append((p["time"], lat, lon))
+#
+#     return nav
 
 
 # ============================================================
@@ -164,10 +194,14 @@ def build_navigation_series(packets):
 # ============================================================
 
 def extract_sounder_config(packets):
+    """
+    Extract basic sounder configuration from XML packets.
+    If fields are missing (common in Seapix EVD), return defaults.
+    """
     cfg = {
-        "sounder_model": None,
-        "absorption": None,
+        "sonar_model": None,
         "sound_speed": None,
+        "absorption": None,
         "beam_count": None,
         "beam_spread": None,
         "beam_angle_mode": None,
@@ -178,7 +212,7 @@ def extract_sounder_config(packets):
         ptype = p["type"]
 
         if ptype == "TransducerList":
-            cfg["sounder_model"] = attrs.get("Sounder")
+            cfg["sonar_model"] = attrs.get("Sounder")
 
         if ptype == "Calibration":
             cfg["absorption"] = attrs.get("AbsorptionCoefficient")
@@ -190,6 +224,34 @@ def extract_sounder_config(packets):
             cfg["beam_angle_mode"] = attrs.get("BeamAngleMode")
 
     return cfg
+
+# def extract_sounder_config(packets):
+#     cfg = {
+#         "sounder_model": None,
+#         "absorption": None,
+#         "sound_speed": None,
+#         "beam_count": None,
+#         "beam_spread": None,
+#         "beam_angle_mode": None,
+#     }
+#
+#     for p in packets:
+#         attrs = p["attrs"]
+#         ptype = p["type"]
+#
+#         if ptype == "TransducerList":
+#             cfg["sounder_model"] = attrs.get("Sounder")
+#
+#         if ptype == "Calibration":
+#             cfg["absorption"] = attrs.get("AbsorptionCoefficient")
+#             cfg["sound_speed"] = attrs.get("SoundSpeed")
+#
+#         if ptype == "BeamAngles":
+#             cfg["beam_count"] = attrs.get("BeamCount")
+#             cfg["beam_spread"] = attrs.get("BeamSpread")
+#             cfg["beam_angle_mode"] = attrs.get("BeamAngleMode")
+#
+#     return cfg
 
 
 # ============================================================
@@ -204,18 +266,19 @@ def infer_ping_count(packets):
 # 7. SONAR-NETCDF4 METADATA GROUPS
 # ============================================================
 
-def build_sonarnetcdf4_metadata(packets):
+def build_sonarnetcdf4_metadata(packets, evd_path):
     t_start, t_end, duration = extract_time_bounds(packets)
-    nav = build_navigation_series(packets)
+    nav = build_navigation_series(packets)  # see below
     sounder = extract_sounder_config(packets)
-    ping_count = infer_ping_count(packets)
+
+    ping_count = count_pingdata_blocks(evd_path)
 
     return {
         "platform": {
             "platform_type": "vessel",
         },
         "sonar": {
-            "sonar_model": sounder["sounder_model"],
+            "sonar_model": sounder["sonar_model"],
             "sound_speed": sounder["sound_speed"],
             "absorption": sounder["absorption"],
         },
@@ -237,6 +300,40 @@ def build_sonarnetcdf4_metadata(packets):
             "longitude": [lon for (_, _, lon) in nav],
         },
     }
+
+# def build_sonarnetcdf4_metadata(packets):
+#     t_start, t_end, duration = extract_time_bounds(packets)
+#     nav = build_navigation_series(packets)
+#     sounder = extract_sounder_config(packets)
+#     ping_count = infer_ping_count(packets)
+#
+#     return {
+#         "platform": {
+#             "platform_type": "vessel",
+#         },
+#         "sonar": {
+#             "sonar_model": sounder["sounder_model"],
+#             "sound_speed": sounder["sound_speed"],
+#             "absorption": sounder["absorption"],
+#         },
+#         "beam": {
+#             "beam_count": sounder["beam_count"],
+#             "beam_spread": sounder["beam_spread"],
+#             "beam_angle_mode": sounder["beam_angle_mode"],
+#         },
+#         "ping": {
+#             "ping_count": ping_count,
+#             "time_start": t_start.isoformat() if t_start else None,
+#             "time_end": t_end.isoformat() if t_end else None,
+#             "duration_seconds": duration,
+#         },
+#         "navigation": {
+#             "nav_count": len(nav),
+#             "time": [t.isoformat() for (t, _, _) in nav],
+#             "latitude": [lat for (_, lat, _) in nav],
+#             "longitude": [lon for (_, _, lon) in nav],
+#         },
+#     }
 
 
 # ============================================================
@@ -287,38 +384,41 @@ def main():
         print(f"  {k}: {v}")
     print()
 
-    sonarnc_meta = build_sonarnetcdf4_metadata(packets)
+    # sonarnc_meta = build_sonarnetcdf4_metadata(packets)
+    sonarnc_meta = build_sonarnetcdf4_metadata(packets, evd_path)
     acmeta = build_acmeta_metadata(packets, sonarnc_meta)
+
 
     print("AcMeta metadata (text):")
     print(json.dumps(acmeta, indent=2))
 
-    out_json = os.path.splitext(evd_path)[0] + "_acmeta.json"
+    out_json = os.path.splitext(evd_path)[0] + "_acmeta_v07-1.json"
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(acmeta, f, indent=2)
     print(f"\nAcMeta JSON written to:\n  {out_json}")
 
 
-    ## Examine binary data
-    NBYTESBIN = 20000
-    print( f"Examine binary data NBYTES = {NBYTESBIN}")
-    with open(evd_path, "rb") as f:
-        data = f.read(NBYTESBIN)
-    # Find the BeamAngles tag
-    idx = data.find(b"<BeamAngles")
-    print(idx)
-    # Print 300 bytes starting at the binary payload
-    print(data[idx:idx + 300])
+    if( OPTIONS_INSPECTBIN ):
+        ## Examine binary data
+        NBYTESBIN = 20000
+        print( f"Examine binary data NBYTES = {NBYTESBIN}")
+        with open(evd_path, "rb") as f:
+            data = f.read(NBYTESBIN)
+        # Find the BeamAngles tag
+        idx = data.find(b"<BeamAngles")
+        print(idx)
+        # Print 300 bytes starting at the binary payload
+        print(data[idx:idx + 300])
 
-    ## Examine the first <BeamData> block
-    print(f"\nExamine first <BeamData> block\n")
-    with open(evd_path, "rb") as f:
-        data = f.read()
+        ## Examine the first <BeamData> block
+        print(f"\nExamine first <BeamData> block\n")
+        with open(evd_path, "rb") as f:
+            data = f.read()
 
-    idx = data.find(b"<BeamData")
-    print("BeamData starts at:", idx)
+        idx = data.find(b"<BeamData")
+        print("BeamData starts at:", idx)
 
-    print(data[idx:idx + 500])
+        print(data[idx:idx + 500])
 
 
 if __name__ == "__main__":

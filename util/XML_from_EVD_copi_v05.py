@@ -9,72 +9,38 @@ from datetime import datetime
 # 1. STREAM XML PACKETS UNTIL BINARY APPEARS
 # ============================================================
 
-import re
-import struct
-import xml.etree.ElementTree as ET
-
-BEAM_TAG_RE = re.compile(br'<BeamAngles[^>]*>')
-PACKET_START_RE = re.compile(br'<Packet\b')
-PACKET_END_RE = re.compile(br'</Packet>')
-
-def iter_xml_packets_binary_aware(evd_path):
-    with open(evd_path, "rb") as f:
-        data = f.read()
-
-    pos = 0
-    n = len(data)
+def iter_xml_packets(evd_path):
+    """
+    Stream through a Seapix EVD file and yield each <Packet>...</Packet>.
+    Stops automatically when binary data corrupts XML.
+    Yields (Element, bytes_read, packets_parsed).
+    """
+    packet_lines = []
+    inside_packet = False
+    bytes_read = 0
     packets_parsed = 0
 
-    while pos < n:
-        # Look for next <Packet or <BeamAngles
-        m_pkt = PACKET_START_RE.search(data, pos)
-        m_beam = BEAM_TAG_RE.search(data, pos)
+    with open(evd_path, "r", errors="ignore") as f:
+        for line in f:
+            bytes_read += len(line.encode("utf-8", errors="ignore"))
 
-        # Decide which comes first
-        candidates = [(m_pkt, "packet"), (m_beam, "beam")]
-        candidates = [(m, kind) for (m, kind) in candidates if m is not None]
-        if not candidates:
-            break
+            if "<Packet" in line:
+                inside_packet = True
+                packet_lines = [line]
+                continue
 
-        m, kind = min(candidates, key=lambda x: x[0].start())
-        pos = m.start()
+            if inside_packet:
+                packet_lines.append(line)
 
-        if kind == "packet":
-            # Find end of this Packet
-            m_end = PACKET_END_RE.search(data, pos)
-            if not m_end:
-                break
-            xml_bytes = data[pos:m_end.end()]
-            try:
-                elem = ET.fromstring(xml_bytes.decode("utf-8", errors="ignore"))
-                packets_parsed += 1
-                yield elem
-            except Exception:
-                # malformed packet, skip
-                pass
-            pos = m_end.end()
-        else:
-            # BeamAngles: parse start tag, skip binary payload, skip closing tag
-            tag_bytes = m.group(0)
-            tag_text = tag_bytes.decode("utf-8", errors="ignore")
-            # Extract BeamCount
-            m_bc = re.search(r'BeamCount="(\d+)"', tag_text)
-            beam_count = int(m_bc.group(1)) if m_bc else 0
-
-            # Move pos to end of start tag
-            pos = m.end()
-
-            # Skip binary payload: beam_count * 4 bytes (float32)
-            skip_bytes = beam_count * 4
-            pos += skip_bytes
-
-            # Skip closing tag </BeamAngles>
-            close_idx = data.find(b"</BeamAngles>", pos)
-            if close_idx == -1:
-                break
-            pos = close_idx + len(b"</BeamAngles>")
-            # Then continue loop
-
+                if "</Packet>" in line:
+                    xml_text = "".join(packet_lines)
+                    try:
+                        elem = ET.fromstring(xml_text)
+                        packets_parsed += 1
+                        yield elem, bytes_read, packets_parsed
+                    except Exception:
+                        return
+                    inside_packet = False
 
 
 # ============================================================
@@ -91,15 +57,18 @@ def parse_time_attr(time_str):
             continue
     return None
 
+
 def collect_packets(evd_path):
     packets = []
+    last_bytes_read = 0
+    packets_parsed = 0
 
-    for elem in iter_xml_packets_binary_aware(evd_path):
+    for elem, bytes_read, packets_parsed in iter_xml_packets(evd_path):
+        last_bytes_read = bytes_read
         ptype = elem.attrib.get("Type", "")
         params = elem.find("Parameters")
         attrs = params.attrib if params is not None else {}
         t = parse_time_attr(attrs.get("Time"))
-
         packets.append({
             "type": ptype,
             "time": t,
@@ -107,14 +76,15 @@ def collect_packets(evd_path):
             "raw_elem": elem,
         })
 
-    # Diagnostics: we no longer track bytes_read here
-    diag = {
-        "packets_parsed": len(packets),
-        "bytes_read": None,
-        "file_size": os.path.getsize(evd_path),
-        "reached_eof": True,   # binary-aware scanner always reaches EOF
-    }
+    file_size = os.path.getsize(evd_path)
+    reached_eof = (last_bytes_read >= file_size)
 
+    diag = {
+        "packets_parsed": packets_parsed,
+        "bytes_read": last_bytes_read,
+        "file_size": file_size,
+        "reached_eof": reached_eof,
+    }
     return packets, diag
 
 
@@ -298,27 +268,16 @@ def main():
         json.dump(acmeta, f, indent=2)
     print(f"\nAcMeta JSON written to:\n  {out_json}")
 
-
-    ## Examine binary data
-    NBYTESBIN = 20000
-    print( f"Examine binary data NBYTES = {NBYTESBIN}")
+    ##
     with open(evd_path, "rb") as f:
-        data = f.read(NBYTESBIN)
+        data = f.read(20000)
+
     # Find the BeamAngles tag
     idx = data.find(b"<BeamAngles")
     print(idx)
+
     # Print 300 bytes starting at the binary payload
     print(data[idx:idx + 300])
-
-    ## Examine the first <BeamData> block
-    print(f"\nExamine first <BeamData> block\n")
-    with open(evd_path, "rb") as f:
-        data = f.read()
-
-    idx = data.find(b"<BeamData")
-    print("BeamData starts at:", idx)
-
-    print(data[idx:idx + 500])
 
 
 if __name__ == "__main__":
