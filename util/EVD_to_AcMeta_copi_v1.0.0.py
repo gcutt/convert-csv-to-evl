@@ -207,13 +207,15 @@ def iter_xml_packets_binary_aware(evd_path):
 
     while True:
         iteration += 1
-        print(f"\nDEBUG: LOOP ITERATION {iteration}, pos={pos}")
+        if( OPTIONS_VERBOSE):
+            print(f"\nDEBUG: LOOP ITERATION {iteration}, pos={pos}")
 
         m_open = PACKET_OPEN_RE.search(data, pos)
-        print("DEBUG: PACKET_OPEN_RE.search returned:", m_open)
+        if( OPTIONS_VERBOSE):
+            print("DEBUG: PACKET_OPEN_RE.search returned:", m_open)
 
         if not m_open:
-            print("DEBUG: NO MORE PACKETS — EXITING ITERATOR")
+            print(f"DEBUG: NO MORE PACKETS — EXITING ITERATOR, FILE {evd_path}")
             return
 
         start = m_open.start()
@@ -271,7 +273,8 @@ def iter_xml_packets_binary_aware(evd_path):
         try:
             xml_text = block.decode("utf-8", errors="ignore")
             elem = ET.fromstring(xml_text)
-            print("DEBUG: SUCCESS: parsed full packet:", elem.tag)
+            if( OPTIONS_VERBOSE ):
+                print("DEBUG: SUCCESS: parsed full packet:", elem.tag)
             yield ("Packet", elem)
         except Exception as e:
             print("DEBUG: XML PARSE FAILED:", e)
@@ -714,6 +717,7 @@ def write_acmeta_csv(acmeta, csv_path):
         w.writerow(["key", "value"])
         for k, v in rows:
             w.writerow([k, v])
+
 
 def write_acmeta_json(acmeta, out_path):
     """
