@@ -161,29 +161,36 @@ def extract_multibeam_ping_info(packets):
     return {}
 
 def extract_initial_xml_region(evd_path):
+    """
+    Extract ONLY the FileInfo + TransducerList packet.
+    Stops immediately after </Packet> for TransducerList.
+    """
     with open(evd_path, "rb") as f:
         data = f.read()
 
-    print("DEBUG: extract_initial_xml_region reading:", evd_path)
-
-    # Start at FileInfo
+    # Find FileInfo
     start = data.find(b"<FileInfo")
     if start == -1:
         start = 0
 
-    # Stop at the first Position or Heading packet (navigation start)
-    stop = data.find(b'<Packet Type="Position"', start)
-    if stop == -1:
-        stop = data.find(b'<Packet Type="Heading"', start)
-    if stop == -1:
-        stop = len(data)
+    # Find TransducerList packet
+    tlist_start = data.find(b'<Packet Type="TransducerList"', start)
+    if tlist_start == -1:
+        # No transducer list — return only FileInfo
+        end = data.find(b"</FileInfo>")
+        if end == -1:
+            end = start + 500  # fallback
+        return data[start:end].decode("utf-8", errors="ignore")
 
-    snippet = data[start:stop]
+    # Find end of TransducerList packet
+    tlist_end = data.find(b"</Packet>", tlist_start)
+    if tlist_end == -1:
+        tlist_end = tlist_start + 200  # fallback
 
-    # Optional: hard cap to avoid huge debug fields
-    max_bytes = 4000
-    if len(snippet) > max_bytes:
-        snippet = snippet[:max_bytes]
+    # Include </Packet>
+    tlist_end += len(b"</Packet>")
+
+    snippet = data[start:tlist_end]
 
     return snippet.decode("utf-8", errors="ignore")
 
@@ -193,14 +200,26 @@ def extract_initial_xml_region(evd_path):
 #
 #     print("DEBUG: extract_initial_xml_region reading:", evd_path)
 #
-#     # Stop at the first navigation packet
-#     nav_idx = data.find(b'<Packet Type="Position"')
-#     if nav_idx == -1:
-#         nav_idx = data.find(b'<Packet Type="Heading"')
-#     if nav_idx == -1:
-#         nav_idx = len(data)
+#     # Start at FileInfo
+#     start = data.find(b"<FileInfo")
+#     if start == -1:
+#         start = 0
 #
-#     return data[:nav_idx].decode("utf-8", errors="ignore")
+#     # Stop at the first Position or Heading packet (navigation start)
+#     stop = data.find(b'<Packet Type="Position"', start)
+#     if stop == -1:
+#         stop = data.find(b'<Packet Type="Heading"', start)
+#     if stop == -1:
+#         stop = len(data)
+#
+#     snippet = data[start:stop]
+#
+#     # Optional: hard cap to avoid huge debug fields
+#     max_bytes = 4000
+#     if len(snippet) > max_bytes:
+#         snippet = snippet[:max_bytes]
+#
+#     return snippet.decode("utf-8", errors="ignore")
 
 
 def count_pingdata_blocks(evd_path):
@@ -745,7 +764,26 @@ def build_acmeta_metadata(packets, evd_path, synthetic_headers):
     sonar_model = extract_sonar_model_from_header(header_xml)
 
     # --- Beam spread selection ---
-    beam_spread_value = spreads[0] if spreads else None
+    # beam_spread_value = spreads[0] if spreads else None
+    if spreads:
+        beam_spread_value = max(spreads)  # use the real swath width
+    else:
+        beam_spread_value = None
+    # --- Beam span (derived) ---
+    if beam_spread_value:
+        span_min = -beam_spread_value / 2
+        span_max = beam_spread_value / 2
+    else:
+        span_min = None
+        span_max = None
+
+    # acmeta["beam"] = {
+    #     "beam_count": beam_summary.get("beam_count"),
+    #     "beam_spread": beam_spread_value,
+    #     "beam_angle_mode": beam_summary.get("beam_angle_mode"),
+    #     "beam_span_min": span_min,
+    #     "beam_span_max": span_max,
+    # }
 
     # --- Navigation summary ---
     if nav:
@@ -796,12 +834,20 @@ def build_acmeta_metadata(packets, evd_path, synthetic_headers):
             "absorption": 0.051,
         },
 
+        # "beam": {
+        #     "beam_count": beam_summary.get("beam_count"),
+        #     "beam_spread": beam_spread_value,
+        #     "beam_angle_mode": beam_summary.get("beam_angle_mode"),
+        #     "beam_span_min": None,
+        #     "beam_span_max": None,
+        # },
+
         "beam": {
             "beam_count": beam_summary.get("beam_count"),
             "beam_spread": beam_spread_value,
             "beam_angle_mode": beam_summary.get("beam_angle_mode"),
-            "beam_span_min": None,
-            "beam_span_max": None,
+            "beam_span_min": span_min,
+            "beam_span_max": span_max,
         },
 
         "ping": {
@@ -916,12 +962,12 @@ def main():
         print(json.dumps(acmeta, indent=2))
 
     # Write to json
-    json_path = os.path.splitext(evd_path)[0] + "_acmeta_v01-9x.json"
+    json_path = os.path.splitext(evd_path)[0] + "_acmeta_v01-9x2.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(acmeta, f, indent=2)
 
     # write to csv
-    csv_path = evd_path.replace(".evd", "_acmeta_v01-9x.csv")
+    csv_path = evd_path.replace(".evd", "_acmeta_v01-9x2.csv")
     write_acmeta_csv(acmeta, csv_path)
 
     print(f"\nAcMeta JSON written to:\n  {json_path}")
