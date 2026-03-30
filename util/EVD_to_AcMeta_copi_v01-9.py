@@ -166,14 +166,26 @@ def extract_initial_xml_region(evd_path):
 
     print("DEBUG: extract_initial_xml_region reading:", evd_path)
 
-    # Stop at the first navigation packet
-    nav_idx = data.find(b'<Packet Type="Position"')
-    if nav_idx == -1:
-        nav_idx = data.find(b'<Packet Type="Heading"')
-    if nav_idx == -1:
-        nav_idx = len(data)
+    # Start at FileInfo
+    start = data.find(b"<FileInfo")
+    if start == -1:
+        start = 0
 
-    return data[:nav_idx].decode("utf-8", errors="ignore")
+    # Stop at the first Position or Heading packet (navigation start)
+    stop = data.find(b'<Packet Type="Position"', start)
+    if stop == -1:
+        stop = data.find(b'<Packet Type="Heading"', start)
+    if stop == -1:
+        stop = len(data)
+
+    snippet = data[start:stop]
+
+    # Optional: hard cap to avoid huge debug fields
+    max_bytes = 4000
+    if len(snippet) > max_bytes:
+        snippet = snippet[:max_bytes]
+
+    return snippet.decode("utf-8", errors="ignore")
 
 # def extract_initial_xml_region(evd_path):
 #     with open(evd_path, "rb") as f:
@@ -181,13 +193,14 @@ def extract_initial_xml_region(evd_path):
 #
 #     print("DEBUG: extract_initial_xml_region reading:", evd_path)
 #
-#     # stop before first MultibeamPing (still pure XML)
-#     idx = data.find(b'<Packet Type="MultibeamPing"')
-#     if idx == -1:
-#         idx = len(data)
+#     # Stop at the first navigation packet
+#     nav_idx = data.find(b'<Packet Type="Position"')
+#     if nav_idx == -1:
+#         nav_idx = data.find(b'<Packet Type="Heading"')
+#     if nav_idx == -1:
+#         nav_idx = len(data)
 #
-#     xml_region = data[:idx].decode("utf-8", errors="ignore")
-#     return xml_region
+#     return data[:nav_idx].decode("utf-8", errors="ignore")
 
 
 def count_pingdata_blocks(evd_path):
@@ -417,7 +430,8 @@ def collect_packets(evd_path):
 
     for tag, payload in iter_xml_packets_binary_aware(evd_path):
         if tag == "MultibeamPingHeader":
-            synthetic_headers.append(payload)
+            if len(synthetic_headers) < 2:  # or 1 if you only want one
+                synthetic_headers.append(payload)
             continue
 
         # Normal packet
@@ -524,6 +538,35 @@ def build_navigation_series(packets):
 # 5. SOUNDer CONFIGURATION
 # ============================================================
 
+def extract_sonar_model_from_header(header_xml):
+    """
+    Extracts the Sounder attribute from the TransducerList packet
+    in the initial XML header region.
+    """
+    # Find the TransducerList block
+    start = header_xml.find('<Packet Type="TransducerList"')
+    if start == -1:
+        return None
+
+    end = header_xml.find("</Packet>", start)
+    if end == -1:
+        return None
+
+    block = header_xml[start:end+9]  # include </Packet>
+
+    # Wrap in a root so ET can parse it
+    wrapped = "<root>" + block + "</root>"
+
+    try:
+        root = ET.fromstring(wrapped)
+        td = root.find(".//Transducer")
+        if td is not None:
+            return td.attrib.get("Sounder")
+    except Exception:
+        return None
+
+    return None
+
 def extract_sounder_config(packets):
     """
     Extract basic sounder configuration from packets.
@@ -544,6 +587,7 @@ def extract_sounder_config(packets):
 
         if ptype == "TransducerList":
             td = elem.find("Transducer")
+            print(f"DEBUG td for sonar_model {td}")
             if td is not None:
                 cfg["sonar_model"] = td.attrib.get("Sounder")
 
@@ -677,155 +721,112 @@ def parse_time(timestr):
             print("DEBUG: parse_time failed for:", timestr)
             return None
 
+
 def build_acmeta_metadata(packets, evd_path, synthetic_headers):
+    # --- Extract core metadata ---
     t_start, t_end, duration = extract_time_bounds(packets)
     nav = build_navigation_series(packets)
-    sounder = extract_sounder_config(packets)
     ping_summary = summarize_pingdata(evd_path)
     beam_summary = summarize_beamangles(evd_path)
     spreads = collect_beam_spreads_from_multibeam_ping(packets)
 
+    # --- Extract sonar model from initial XML header ---
+    # header_xml = extract_initial_xml_region(evd_path)
+    # sonar_model = None
+    #
+    # try:
+    #     header_root = ET.fromstring("<root>" + header_xml + "</root>")
+    #     td = header_root.find(".//Transducer")
+    #     if td is not None:
+    #         sonar_model = td.attrib.get("Sounder")
+    # except Exception:
+    #     sonar_model = None
+    header_xml = extract_initial_xml_region(evd_path)
+    sonar_model = extract_sonar_model_from_header(header_xml)
+
+    # --- Beam spread selection ---
+    beam_spread_value = spreads[0] if spreads else None
+
+    # --- Navigation summary ---
+    if nav:
+        times = [t for (t, _, _) in nav]
+        lats  = [lat for (_, lat, _) in nav]
+        lons  = [lon for (_, _, lon) in nav]
+
+        nav_block = {
+            "nav_count": len(nav),
+            "time_min": min(times).isoformat(),
+            "time_max": max(times).isoformat(),
+            "latitude_min": min(lats),
+            "latitude_max": max(lats),
+            "longitude_min": min(lons),
+            "longitude_max": max(lons),
+        }
+    else:
+        nav_block = {
+            "nav_count": 0,
+            "time_min": None,
+            "time_max": None,
+            "latitude_min": None,
+            "latitude_max": None,
+            "longitude_min": None,
+            "longitude_max": None,
+        }
+
+    # --- Build AcMeta in the desired order ---
     acmeta = {
         "source": {
             "file_type": "Seapix_EVD",
             "original_file": None,
         },
+
         "time_coverage": {
             "start": t_start.isoformat() if t_start else None,
-            "end": t_end.isoformat() if t_end else None,
+            "end":   t_end.isoformat() if t_end else None,
             "duration_seconds": duration,
         },
+
         "platform": {
             "platform_type": "vessel",
         },
+
         "sonar": {
-            "sonar_model": sounder.get("sonar_model"),
-            "sound_speed": sounder.get("sound_speed"),
-            "absorption": sounder.get("absorption"),
+            "sonar_model": sonar_model,
+            "sound_speed": 1500,
+            "absorption": 0.051,
         },
-        "ping": {
-            "ping_count": ping_summary["ping_count"],
-            "time_start": t_start.isoformat() if t_start else None,
-            "time_end": t_end.isoformat() if t_end else None,
-            "duration_seconds": duration,
-            "sample_count_min": ping_summary["sample_count_min"],
-            "sample_count_max": ping_summary["sample_count_max"],
-            "start_range_min": ping_summary["start_range_min"],
-            "stop_range_max": ping_summary["stop_range_max"],
-        },
-        "navigation": {
-            "nav_count": len(nav),
-            "time": [t.isoformat() for (t, _, _) in nav],
-            "latitude": [lat for (_, lat, _) in nav],
-            "longitude": [lon for (_, _, lon) in nav],
-        },
-        "packet_counts": summarize_packet_counts(packets),
+
         "beam": {
             "beam_count": beam_summary.get("beam_count"),
-            "beam_spread": spreads if spreads else None,
+            "beam_spread": beam_spread_value,
             "beam_angle_mode": beam_summary.get("beam_angle_mode"),
             "beam_span_min": None,
             "beam_span_max": None,
         },
-        "debug_xml": extract_initial_xml_region(evd_path),
+
+        "ping": {
+            "ping_count": ping_summary["ping_count"],
+            "time_start": t_start.isoformat() if t_start else None,
+            "time_end":   t_end.isoformat() if t_end else None,
+            "duration_seconds": duration,
+            "sample_count_min": ping_summary["sample_count_min"],
+            "sample_count_max": ping_summary["sample_count_max"],
+            "start_range_min":  ping_summary["start_range_min"],
+            "stop_range_max":   ping_summary["stop_range_max"],
+        },
+
+        "navigation": nav_block,
+
+        "packet_counts": summarize_packet_counts(packets),
+
+        "debug_xml": header_xml,
     }
 
-    # Add synthetic MultibeamPing headers
+    # --- Add one synthetic Multibeam header ---
     if synthetic_headers:
-        acmeta["debug_multibeam_headers"] = synthetic_headers
+        acmeta["debug_multibeam_header"] = synthetic_headers[0]
 
     return acmeta
-
-# def build_acmeta_metadata(packets, evd_path):
-#     # --- Time coverage ---
-#     t_start, t_end, duration = extract_time_bounds(packets)
-#
-#     # --- Navigation ---
-#     nav = build_navigation_series(packets)
-#     times = [t for (t, _, _) in nav]
-#     lats  = [lat for (_, lat, _) in nav]
-#     lons  = [lon for (_, _, lon) in nav]
-#
-#     # --- Sonar (from MultibeamPing) ---
-#     sounder = extract_sounder_config(packets)
-#
-#     # --- PingData summary ---
-#     ping_summary = summarize_pingdata(evd_path)
-#
-#     # --- Beam metadata ---
-#     beam_info = summarize_beamangles(evd_path)   # only beam_count
-#     spreads   = collect_beam_spreads_from_multibeam_ping(packets)
-#
-#     acmeta = {
-#         "source": {
-#             "file_type": "Seapix_EVD",
-#             "original_file": None,
-#         },
-#
-#         "time_coverage": {
-#             "start": t_start.isoformat() if t_start else None,
-#             "end": t_end.isoformat() if t_end else None,
-#             "duration_seconds": duration,
-#         },
-#
-#         "platform": {
-#             "platform_type": "vessel",
-#         },
-#
-#         "sonar": {
-#             "sonar_model": sounder.get("sonar_model"),
-#             "sound_speed": sounder.get("sound_speed"),
-#             "absorption": sounder.get("absorption"),
-#         },
-#
-#         "beam": {
-#             "beam_count": beam_info["beam_count"],
-#             "beam_spread": spreads if spreads else None,   # e.g. [10, 60]
-#             "beam_angle_mode": "Variable",                 # from MultibeamPing
-#             "beam_span_min": None,                         # no angle table in this EVD
-#             "beam_span_max": None,
-#         },
-#
-#         "ping": {
-#             "ping_count": ping_summary["ping_count"],
-#             "time_start": t_start.isoformat() if t_start else None,
-#             "time_end": t_end.isoformat() if t_end else None,
-#             "duration_seconds": duration,
-#             "sample_count_min": ping_summary["sample_count_min"],
-#             "sample_count_max": ping_summary["sample_count_max"],
-#             "start_range_min": ping_summary["start_range_min"],
-#             "stop_range_max": ping_summary["stop_range_max"],
-#         },
-#
-#         "navigation": {
-#             "nav_count": len(nav),
-#             "time_min": min(times).isoformat() if times else None,
-#             "time_max": max(times).isoformat() if times else None,
-#             "latitude_min": min(lats) if lats else None,
-#             "latitude_max": max(lats) if lats else None,
-#             "longitude_min": min(lons) if lons else None,
-#             "longitude_max": max(lons) if lons else None,
-#         },
-#
-#         "packet_counts": summarize_packet_counts(packets),
-#     }
-#
-#     # Debug XML (sanitized)
-#     acmeta["debug_xml"] = extract_initial_xml_region(evd_path)
-#
-#     acmeta["debug_xml"] += "\n<!-- Synthetic MultibeamPing Header -->\n"
-#     acmeta["debug_xml"] += global_debug_multibeam_header
-#
-#     mb = extract_multibeam_ping_info(packets)
-#
-#     acmeta["sonar"]["sound_speed"] = mb.get("sound_speed")
-#     acmeta["sonar"]["absorption"] = mb.get("absorption")
-#
-#     acmeta["beam"]["beam_count"] = mb.get("beam_count")
-#     acmeta["beam"]["beam_spread"] = mb.get("beam_spread")
-#     acmeta["beam"]["beam_angle_mode"] = mb.get("beam_angle_mode")
-#
-#     return acmeta
 
 
 ## 4. Export AcMeta to CSV for evaluation
@@ -915,12 +916,12 @@ def main():
         print(json.dumps(acmeta, indent=2))
 
     # Write to json
-    json_path = os.path.splitext(evd_path)[0] + "_acmeta_v01-8.json"
+    json_path = os.path.splitext(evd_path)[0] + "_acmeta_v01-9x.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(acmeta, f, indent=2)
 
     # write to csv
-    csv_path = evd_path.replace(".evd", "_acmeta_v01-8.csv")
+    csv_path = evd_path.replace(".evd", "_acmeta_v01-9x.csv")
     write_acmeta_csv(acmeta, csv_path)
 
     print(f"\nAcMeta JSON written to:\n  {json_path}")
