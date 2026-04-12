@@ -11,6 +11,7 @@ print("RUNNING SCRIPT VERSION X")
 OPTIONS_INSPECTBIN = False
 OPTIONS_VERBOSE = False
 OPTIONS_DEBUG_BEAMANGLES = False
+OPTIONS_DEBUG_MultibeamPing = False
 
 # ============================================================
 # 1. STREAM XML PACKETS UNTIL BINARY APPEARS
@@ -29,14 +30,14 @@ def summarize_pingdata(evd_path):
     """
     Scan all <PingData ...> tags and summarize:
       - ping_count
-      - min/max SampleCount
-      - min StartRange
-      - max StopRange
-    """
+      - m
     with open(evd_path, "rb") as f:
         data = f.read()
 
-    ping_tags = re.findall(br'<PingData[^>]*>', data)
+    ping_tags = re.findall(br'<in/max SampleCount
+      - min StartRange
+      - max StopRange
+    """PingData[^>]*>', data)
     ping_count = len(ping_tags)
 
     if ping_count == 0:
@@ -233,7 +234,8 @@ def iter_xml_packets_binary_aware(evd_path):
         # SPECIAL CASE: MultibeamPing packets contain binary
         # ============================================================
         if b'Type="MultibeamPing"' in block:
-            print("DEBUG: MultibeamPing detected — building synthetic header")
+            if( OPTIONS_DEBUG_MultibeamPing ):
+                print("DEBUG: MultibeamPing detected — building synthetic header")
 
             params = re.search(br'<Parameters[^>]*/>', block)
             calib  = re.search(br'<Calibration[^>]*/>', block)
@@ -255,11 +257,13 @@ def iter_xml_packets_binary_aware(evd_path):
             safe_xml = b'\n'.join(xml_parts)
             synthetic_text = safe_xml.decode("utf-8", errors="ignore")
 
-            print("DEBUG: synthetic MultibeamPing header:\n", synthetic_text)
+            if( OPTIONS_DEBUG_MultibeamPing ):
+                print("DEBUG: synthetic MultibeamPing header:\n", synthetic_text)
 
             try:
                 elem = ET.fromstring(synthetic_text)
-                print("DEBUG: SUCCESS: parsed synthetic MultibeamPing header")
+                if( OPTIONS_DEBUG_MultibeamPing ):
+                    print("DEBUG: SUCCESS: parsed synthetic MultibeamPing header")
                 yield ("Packet", elem)
                 yield ("MultibeamPingHeader", synthetic_text)
             except Exception as e:
@@ -803,7 +807,7 @@ def main():
     print("ERROR: Path is neither a directory nor an .evd file.")
 
 
-
+## Main to process a hardcoded filename
 # def main():
 #     print("DEBUG: main() is running")
 #
