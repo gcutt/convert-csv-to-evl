@@ -26,18 +26,32 @@ PACKET_OPEN_RE = re.compile(
 PACKET_CLOSE_RE = re.compile(br'</Packet\s*>', re.IGNORECASE)
 
 ##
+# def summarize_pingdata(evd_path):
+#     """
+#     Scan all <PingData ...> tags and summarize:
+#       - ping_count
+#       - m
+#     """
+#     with open(evd_path, "rb") as f:
+#         data = f.read()
+#
+#     ping_tags = re.findall(br'<in/max SampleCount
+#       - min StartRange
+#       - max StopRange
+#     PingData[^>]*>', data)
+#     ping_count = len(ping_tags)
 def summarize_pingdata(evd_path):
     """
     Scan all <PingData ...> tags and summarize:
       - ping_count
-      - m
+      - min/max SampleCount
+      - min StartRange
+      - max StopRange
+    """
     with open(evd_path, "rb") as f:
         data = f.read()
 
-    ping_tags = re.findall(br'<in/max SampleCount
-      - min StartRange
-      - max StopRange
-    """PingData[^>]*>', data)
+    ping_tags = re.findall(br'<PingData[^>]*>', data)
     ping_count = len(ping_tags)
 
     if ping_count == 0:
@@ -807,6 +821,10 @@ def main():
     print("ERROR: Path is neither a directory nor an .evd file.")
 
 
+if __name__ == "__main__":
+    main()
+
+
 ## Main to process a hardcoded filename
 # def main():
 #     print("DEBUG: main() is running")
@@ -862,7 +880,3 @@ def main():
 #
 #     # print(f"\nAcMeta JSON written to:\n  {out_json}")
 
-
-
-if __name__ == "__main__":
-    main()

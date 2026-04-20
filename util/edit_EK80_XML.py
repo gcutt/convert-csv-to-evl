@@ -1,5 +1,5 @@
 #-----------------------------------------------
-## edit_EK80_XML.py
+#  edit_EK80_XML.py
 #
 #  Purpose:
 #   Edit environment data parameters in the XML of EK80 raw files.
@@ -53,6 +53,15 @@
 #     Processing file: CAL_333CW_512_38_BERMUDA_2025_DAY-Phase0-D20250902-T213930-0.raw
 #     Output file    : CAL_333CW_512_38_BERMUDA_2025_DAY-Phase0-D20250902-T213930-0_edited.raw
 #     ========================================
+#
+#     Correct envi parameter values for Night-Blue EK80 calibration
+#     <SoundVelocity>1545.08</SoundVelocity>
+#     <Temperature>29.35</Temperature>
+#     <Salinity>36</Salinity>
+#     <Acidity>8.00</Acidity>
+#
+#     > python edit_EK80_XML_run.py --dir "D:\_DATA\NB-incorrect-envi" --temp 29.35 --sal 36.0 --ssp 1545.08
+#
 #-----------------------------------------------
 
 
