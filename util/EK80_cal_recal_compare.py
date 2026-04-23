@@ -1,3 +1,9 @@
+"""
+Compares EK80 calibration results in pairs of EK80 calibration XML results files,
+with same prefix and 'cal'/'recal' designation in fn.
+e.g. "200CW-...Cal....XML" vs "200CW-...ReCal....XML"
+"""
+
 import os
 import glob
 import numpy as np
@@ -214,24 +220,32 @@ def pair_files(directory):
 #         cal = parse_calibration_results(cal_path)
 #         recal = parse_calibration_results(recal_path)
 #
-#         # CW or FM?
-#         # is_fm = any(isinstance(v, np.ndarray) for v in cal.values())
 #         is_fm = isinstance(cal.get("Frequency"), np.ndarray)
+#         prefix = os.path.basename(cal_path).split("-")[0]
 #
 #         if not is_fm:
 #             print("Detected CW calibration")
 #             df = compare_cw(cal, recal)
 #             print(df)
+#
+#             df.to_csv(f"{prefix}_cw_comparison.csv", index=False)
+#             print(f"Saved CW CSV → {prefix}_cw_comparison.csv")
+#
 #         else:
 #             print("Detected FM calibration")
 #             df = compare_fm(cal, recal)
 #             print(df)
 #
-#             # Plot FM
-#             prefix = os.path.basename(cal_path).split("-")[0]
+#             df.to_csv(f"{prefix}_fm_comparison.csv", index=False)
+#             print(f"Saved FM CSV → {prefix}_fm_comparison.csv")
+#
 #             plot_fm_results(cal, recal, out_png=f"{prefix}_fm_comparison.png")
 def process_directory(directory):
     pairs = pair_files(directory)
+
+    # Create output directory inside the input directory
+    out_dir = os.path.join(directory, "comparison_output")
+    os.makedirs(out_dir, exist_ok=True)
 
     for cal_path, recal_path in pairs:
         print("\n====================================")
@@ -248,18 +262,21 @@ def process_directory(directory):
             df = compare_cw(cal, recal)
             print(df)
 
-            df.to_csv(f"{prefix}_cw_comparison.csv", index=False)
-            print(f"Saved CW CSV → {prefix}_cw_comparison.csv")
+            df.to_csv(os.path.join(out_dir, f"{prefix}_cw_comparison.csv"), index=False)
+            print(f"Saved CW CSV → {os.path.join(out_dir, f'{prefix}_cw_comparison.csv')}")
 
         else:
             print("Detected FM calibration")
             df = compare_fm(cal, recal)
             print(df)
 
-            df.to_csv(f"{prefix}_fm_comparison.csv", index=False)
-            print(f"Saved FM CSV → {prefix}_fm_comparison.csv")
+            df.to_csv(os.path.join(out_dir, f"{prefix}_fm_comparison.csv"), index=False)
+            print(f"Saved FM CSV → {os.path.join(out_dir, f'{prefix}_fm_comparison.csv')}")
 
-            plot_fm_results(cal, recal, out_png=f"{prefix}_fm_comparison.png")
+            plot_fm_results(
+                cal, recal,
+                out_png=os.path.join(out_dir, f"{prefix}_fm_comparison.png")
+            )
 
 
 def fmt(param, value):
