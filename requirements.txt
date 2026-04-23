@@ -1,1 +1,11 @@
 # Add your dependencies here
+#xml
+numpy
+matplotlib 
+scipy
+pandas
+datetime
+#json
+#collections
+#csv
+#re

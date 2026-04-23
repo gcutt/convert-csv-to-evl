@@ -1,0 +1,12 @@
+Parameter,Cal,ReCal,Difference
+PulseLength,0.000512,0.000512,0.000000
+Frequency,200000.00,200000.00,0.00
+Gain,24.66,24.86,-0.20
+SaCorrection,-0.0692,-0.0447,-0.0245
+BeamWidthAlongship,7.26,7.28,-0.02
+BeamWidthAthwartship,7.08,7.06,0.02
+AngleOffsetAlongship,0.02,-0.02,0.04
+AngleOffsetAthwartship,0.04,0.06,-0.02
+TsRmsError,0.1354,0.1539,-0.0185
+Impedance,75.00,75.00,0.00
+Phase,0.00,0.00,0.00
