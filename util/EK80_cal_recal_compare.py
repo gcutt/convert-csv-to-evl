@@ -30,25 +30,6 @@ def parse_calibration_results(xml_path):
     if calib is None:
         raise ValueError(f"No CalibrationResults found in {xml_path}")
 
-    # results = {}
-    # for elem in calib:
-    #     text = elem.text.strip()
-    #
-    #     # Detect array vs scalar
-    #     if "," in text or " " in text:
-    #         # Array-like
-    #         try:
-    #             arr = np.array([float(x) for x in text.replace(",", " ").split()])
-    #             results[elem.tag] = arr
-    #         except:
-    #             results[elem.tag] = text
-    #     else:
-    #         # Scalar
-    #         try:
-    #             results[elem.tag] = float(text)
-    #         except:
-    #             results[elem.tag] = text
-
     results = {}
     for elem in calib:
 
@@ -157,13 +138,33 @@ def plot_fm_results(cal, recal, out_png="fm_comparison.png"):
             ax.set_title(f"{param} (missing)")
             continue
 
-        ax.plot(freq_cal, cal[param], label="Cal", lw=2)
-        ax.plot(freq_recal, recal[param], label="ReCal", lw=2)
+        # Lines
+        ax.plot(freq_cal, cal[param], label="Cal", lw=2, color="#1f77b4")
+        ax.plot(freq_recal, recal[param], label="ReCal", lw=2, color="#ff7f0e")
+
+        # Markers
+        ax.plot(freq_cal, cal[param], 'x', color="#1f77b4", markersize=6)
+        ax.plot(freq_recal, recal[param], 'o', color="#ff7f0e", markersize=5)
+
         ax.set_title(param)
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel(param)
         ax.grid(True)
         ax.legend()
+
+    # for ax, param in zip(axes, params):
+    #     if param not in cal or param not in recal:
+    #         ax.set_title(f"{param} (missing)")
+    #         continue
+    #
+    #     ax.plot(freq_cal, cal[param], label="Cal", lw=2, color="#1f77b4")     # blue
+    #     ax.plot(freq_recal, recal[param], label="ReCal", lw=2, color="#ff7f0e")  # orange
+    #
+    #     ax.set_title(param)
+    #     ax.set_xlabel("Frequency (Hz)")
+    #     ax.set_ylabel(param)
+    #     ax.grid(True)
+    #     ax.legend()
 
     plt.tight_layout()
     plt.savefig(out_png, dpi=150)
@@ -178,68 +179,36 @@ def plot_fm_results(cal, recal, out_png="fm_comparison.png"):
 def pair_files(directory):
     """
     Returns list of (cal_file, recal_file) pairs based on shared prefix.
-    Example:
-        200CW-*.xml pairs with 200CW-*ReCalibration*.xml
+    Case-insensitive matching for prefix, 'cal', and 'recal'.
     """
     files = glob.glob(os.path.join(directory, "*.xml"))
     pairs = []
-    print("DEBUG: Found XML files:")
-    for f in files:
-        print("   ", f)
 
-    # Group by prefix (CW or FM)
-    # prefixes = set(f.split("/")[-1].split("-")[0] for f in files)
-    prefixes = set(os.path.basename(f).split("-")[0] for f in files)
+    # Normalize for matching
+    norm = {f: os.path.basename(f).lower() for f in files}
+
+    # Extract prefixes (case-insensitive)
+    prefixes = set(name.split("-")[0] for name in norm.values())
 
     for prefix in prefixes:
-        cal_files = [f for f in files if prefix in f and "ReCalibration" not in f]
-        recal_files = [f for f in files if prefix in f and "ReCalibration" in f]
+        cal_files = [
+            f for f, name in norm.items()
+            if name.startswith(prefix) and "recal" not in name
+        ]
+        recal_files = [
+            f for f, name in norm.items()
+            if name.startswith(prefix) and "recal" in name
+        ]
 
         if len(cal_files) == 1 and len(recal_files) == 1:
             pairs.append((cal_files[0], recal_files[0]))
 
-    print("DEBUG: File pairs detected:")
-    for cal, recal in pairs:
-        print("   CAL:", cal)
-        print("   REC:", recal)
-
     return pairs
-
 
 # ---------------------------------------------------------
 # MAIN WORKFLOW
 # ---------------------------------------------------------
 
-# def process_directory(directory):
-#     pairs = pair_files(directory)
-#
-#     for cal_path, recal_path in pairs:
-#         print("\n====================================")
-#         print(f"Comparing:\n  CAL:   {os.path.basename(cal_path)}\n  RE-CAL:{os.path.basename(recal_path)}")
-#
-#         cal = parse_calibration_results(cal_path)
-#         recal = parse_calibration_results(recal_path)
-#
-#         is_fm = isinstance(cal.get("Frequency"), np.ndarray)
-#         prefix = os.path.basename(cal_path).split("-")[0]
-#
-#         if not is_fm:
-#             print("Detected CW calibration")
-#             df = compare_cw(cal, recal)
-#             print(df)
-#
-#             df.to_csv(f"{prefix}_cw_comparison.csv", index=False)
-#             print(f"Saved CW CSV → {prefix}_cw_comparison.csv")
-#
-#         else:
-#             print("Detected FM calibration")
-#             df = compare_fm(cal, recal)
-#             print(df)
-#
-#             df.to_csv(f"{prefix}_fm_comparison.csv", index=False)
-#             print(f"Saved FM CSV → {prefix}_fm_comparison.csv")
-#
-#             plot_fm_results(cal, recal, out_png=f"{prefix}_fm_comparison.png")
 def process_directory(directory):
     pairs = pair_files(directory)
 
