@@ -1,7 +1,5 @@
 """
-Compares EK80 calibration results in pairs of EK80 calibration XML results files,
-with same prefix and 'cal'/'recal' designation in fn.
-e.g. "200CW-...Cal....XML" vs "200CW-...ReCal....XML"
+Read, summarize, and plot EK80 calibration results in EK80 calibration XML files
 """
 
 import os

@@ -27,15 +27,15 @@ import numpy as np
 # ----------------------------
 image_path = "input.jpg"
 
-H = 1.5  # camera height above seafloor [m]
+H = 1.0  # camera height above seafloor [m]
 
 # Lens FOVs [deg]
-alpha_h_deg = 40.0
-alpha_v_deg = 30.0
+alpha_h_deg = 50.0
+alpha_v_deg = 40.0
 
 # Camera orientation (oceanographic convention)
 yaw_deg   = 0.0     # rotate around world Z (heading)
-pitch_deg = -38.0   # tilt forward/down toward seafloor
+pitch_deg = -70.0   # tilt forward/down toward seafloor
 roll_deg  = 0.0     # rotate around optical axis
 
 # World grid spacing [m]
