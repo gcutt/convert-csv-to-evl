@@ -1,5 +1,7 @@
 """
-Read, summarize, and plot EK80 calibration results in EK80 calibration XML files
+EK80_cal_xml_summarize.py
+Read, summarize, and plot EK80 calibration results in EK80 calibration XML files.
+Processes a single file OR all .xml files in a directory.
 """
 
 import os
@@ -12,7 +14,7 @@ from scipy.stats import iqr
 
 
 # ---------------------------------------------------------
-# XML PARSING HELPERS
+# XML PARSING
 # ---------------------------------------------------------
 
 def parse_calibration_results(xml_path):
@@ -35,7 +37,6 @@ def parse_calibration_results(xml_path):
 
         # Detect array vs scalar
         if ";" in text or " " in text or "," in text:
-            # Normalize separators
             cleaned = text.replace(";", " ").replace(",", " ")
             parts = cleaned.split()
             if len(parts) > 1:
@@ -56,27 +57,8 @@ def parse_calibration_results(xml_path):
 
 
 # ---------------------------------------------------------
-# COMPARISON TABLES
+# SUMMARIZATION
 # ---------------------------------------------------------
-
-def compare_cw(cal, recal):
-    """
-    Build a DataFrame comparing scalar CW calibration results.
-    """
-    rows = []
-    for key in cal:
-        if isinstance(cal[key], float) and isinstance(recal.get(key), float):
-            diff = cal[key] - recal[key]
-            # rows.append([key, cal[key], recal[key], diff])
-            rows.append([
-                key,
-                fmt(key, cal[key]),
-                fmt(key, recal[key]),
-                fmt(key, diff)
-            ])
-
-    return pd.DataFrame(rows, columns=["Parameter", "Cal", "ReCal", "Difference"])
-
 
 def describe_array(arr):
     """Return mean, median, sd, iqr as a dict."""
@@ -88,149 +70,69 @@ def describe_array(arr):
     }
 
 
-def compare_fm(cal, recal):
+def summarize_cw(cal):
     """
-    Build a DataFrame comparing array-based FM calibration results.
-    Each cell contains descriptive statistics.
+    Build a DataFrame summarizing scalar CW calibration results.
     """
     rows = []
-    for key in cal:
-        if isinstance(cal[key], np.ndarray) and isinstance(recal.get(key), np.ndarray):
-            cal_stats = describe_array(cal[key])
-            rec_stats = describe_array(recal[key])
-            diff_stats = {k: cal_stats[k] - rec_stats[k] for k in cal_stats}
+    for key, val in cal.items():
+        if isinstance(val, float):
+            rows.append([key, fmt(key, val)])
+    return pd.DataFrame(rows, columns=["Parameter", "Value"])
 
-            # rows.append([key, cal_stats, rec_stats, diff_stats])
-            rows.append([
-                key,
-                fmt_stats(key, cal_stats),
-                fmt_stats(key, rec_stats),
-                fmt_stats(key, diff_stats)
-            ])
 
-    return pd.DataFrame(rows, columns=["Parameter", "Cal Stats", "ReCal Stats", "Diff Stats"])
+def summarize_fm(cal):
+    """
+    Build a DataFrame summarizing array-based FM calibration results.
+    """
+    rows = []
+    for key, val in cal.items():
+        if isinstance(val, np.ndarray):
+            stats = describe_array(val)
+            rows.append([key, fmt_stats(key, stats)])
+    return pd.DataFrame(rows, columns=["Parameter", "Statistics"])
 
 
 # ---------------------------------------------------------
 # FM PLOTTING
 # ---------------------------------------------------------
 
-def plot_fm_results(cal, recal, out_png="fm_comparison.png"):
+def plot_fm(cal, out_png):
     """
     Create a 4-panel figure for FM calibration arrays.
     """
     params = ["Gain", "SaCorrection", "BeamWidthAlongship", "BeamWidthAthwartship"]
+    freq = cal.get("Frequency")
 
-    freq_cal = cal.get("Frequency")
-    freq_recal = recal.get("Frequency")
-
-    if freq_cal is None or freq_recal is None:
-        print("FM plot skipped: Frequency arrays missing")
+    if freq is None:
+        print("FM plot skipped: Frequency array missing")
         return
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     axes = axes.flatten()
 
     for ax, param in zip(axes, params):
-        if param not in cal or param not in recal:
+        if param not in cal:
             ax.set_title(f"{param} (missing)")
             continue
 
-        # Lines
-        ax.plot(freq_cal, cal[param], label="Cal", lw=2, color="#1f77b4")
-        ax.plot(freq_recal, recal[param], label="ReCal", lw=2, color="#ff7f0e")
-
-        # Markers
-        ax.plot(freq_cal, cal[param], 'x', color="#1f77b4", markersize=6)
-        ax.plot(freq_recal, recal[param], 'o', color="#ff7f0e", markersize=5)
+        ax.plot(freq, cal[param], lw=2, color="#1f77b4")
+        ax.plot(freq, cal[param], 'x', color="#1f77b4", markersize=6)
 
         ax.set_title(param)
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel(param)
         ax.grid(True)
-        ax.legend()
 
     plt.tight_layout()
     plt.savefig(out_png, dpi=150)
     plt.close()
-    print(f"Saved FM comparison figure → {out_png}")
+    print(f"Saved FM figure → {out_png}")
 
 
 # ---------------------------------------------------------
-# FILE PAIRING LOGIC
+# FORMATTING HELPERS
 # ---------------------------------------------------------
-
-def pair_files(directory):
-    """
-    Returns list of (cal_file, recal_file) pairs based on shared prefix.
-    Case-insensitive matching for prefix, 'cal', and 'recal'.
-    """
-    files = glob.glob(os.path.join(directory, "*.xml"))
-    pairs = []
-
-    # Normalize for matching
-    norm = {f: os.path.basename(f).lower() for f in files}
-
-    # Extract prefixes (case-insensitive)
-    prefixes = set(name.split("-")[0] for name in norm.values())
-
-    for prefix in prefixes:
-        cal_files = [
-            f for f, name in norm.items()
-            if name.startswith(prefix) and "recal" not in name
-        ]
-        recal_files = [
-            f for f, name in norm.items()
-            if name.startswith(prefix) and "recal" in name
-        ]
-
-        if len(cal_files) == 1 and len(recal_files) == 1:
-            pairs.append((cal_files[0], recal_files[0]))
-
-    return pairs
-
-# ---------------------------------------------------------
-# MAIN WORKFLOW
-# ---------------------------------------------------------
-
-def process_directory(directory):
-    pairs = pair_files(directory)
-
-    # Create output directory inside the input directory
-    out_dir = os.path.join(directory, "comparison_output")
-    os.makedirs(out_dir, exist_ok=True)
-
-    for cal_path, recal_path in pairs:
-        print("\n====================================")
-        print(f"Comparing:\n  CAL:   {os.path.basename(cal_path)}\n  RE-CAL:{os.path.basename(recal_path)}")
-
-        cal = parse_calibration_results(cal_path)
-        recal = parse_calibration_results(recal_path)
-
-        is_fm = isinstance(cal.get("Frequency"), np.ndarray)
-        prefix = os.path.basename(cal_path).split("-")[0]
-
-        if not is_fm:
-            print("Detected CW calibration")
-            df = compare_cw(cal, recal)
-            print(df)
-
-            df.to_csv(os.path.join(out_dir, f"{prefix}_cw_comparison.csv"), index=False)
-            print(f"Saved CW CSV → {os.path.join(out_dir, f'{prefix}_cw_comparison.csv')}")
-
-        else:
-            print("Detected FM calibration")
-            df = compare_fm(cal, recal)
-            print(df)
-
-            df.to_csv(os.path.join(out_dir, f"{prefix}_fm_comparison.csv"), index=False)
-            print(f"Saved FM CSV → {os.path.join(out_dir, f'{prefix}_fm_comparison.csv')}")
-
-            plot_fm_results(
-                cal, recal,
-                out_png=os.path.join(out_dir, f"{prefix}_fm_comparison.png")
-            )
-
 
 def fmt(param, value):
     if param == "PulseLength":
@@ -244,11 +146,72 @@ def fmt_stats(param, stats):
 
 
 # ---------------------------------------------------------
+# PROCESSING LOGIC
+# ---------------------------------------------------------
+
+def process_file(xml_path, out_dir):
+    """
+    Process a single EK80 calibration XML file.
+    """
+    print("\n====================================")
+    print(f"Processing: {os.path.basename(xml_path)}")
+
+    cal = parse_calibration_results(xml_path)
+    prefix = os.path.splitext(os.path.basename(xml_path))[0]
+
+    is_fm = isinstance(cal.get("Frequency"), np.ndarray)
+
+    if not is_fm:
+        print("Detected CW calibration")
+        df = summarize_cw(cal)
+        print(df)
+
+        csv_path = os.path.join(out_dir, f"{prefix}_cw_summary.csv")
+        df.to_csv(csv_path, index=False)
+        print(f"Saved CW CSV → {csv_path}")
+
+    else:
+        print("Detected FM calibration")
+        df = summarize_fm(cal)
+        print(df)
+
+        csv_path = os.path.join(out_dir, f"{prefix}_fm_summary.csv")
+        df.to_csv(csv_path, index=False)
+        print(f"Saved FM CSV → {csv_path}")
+
+        plot_fm(cal, out_png=os.path.join(out_dir, f"{prefix}_fm_plot.png"))
+
+
+def process_directory(directory):
+    """
+    Process all .xml files in a directory independently.
+    """
+    files = glob.glob(os.path.join(directory, "*.xml"))
+    if not files:
+        print("No XML files found.")
+        return
+
+    out_dir = os.path.join(directory, "summary_output")
+    os.makedirs(out_dir, exist_ok=True)
+
+    for xml_path in files:
+        process_file(xml_path, out_dir)
+
+
+# ---------------------------------------------------------
 # RUN
 # ---------------------------------------------------------
 
 import sys
 
 if __name__ == "__main__":
-    directory = sys.argv[1] if len(sys.argv) > 1 else "./xml_files"
-    process_directory(directory)
+    target = sys.argv[1] if len(sys.argv) > 1 else "./xml_files"
+
+    if os.path.isdir(target):
+        process_directory(target)
+    elif os.path.isfile(target):
+        out_dir = os.path.join(os.path.dirname(target), "summary_output")
+        os.makedirs(out_dir, exist_ok=True)
+        process_file(target, out_dir)
+    else:
+        print(f"Invalid path: {target}")
