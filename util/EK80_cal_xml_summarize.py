@@ -7,15 +7,26 @@ EK80_cal_xml_summarize.py
 • Uses TargetReference Frequency/Response for full-resolution TS(f)
 • CFR → TS_full(f_full) on TargetReference frequency axis
 • TS_full(f_full) → TS_calgrid(f_cal) on CalibrationResults frequency axis
+• Also computes TS_calgrid from UnCompensatedFrequencyResponse (UnCFR)
 • Computes median + IQR across hits
-• Multipanel figure includes:
-    - Gain(f), SaCorrection(f)
-    - BeamWidthAlongship(f), BeamWidthAthwartship(f)
-    - CFR vs index
-    - TS_full(f_full) (median + IQR)
-    - TS_calgrid(f_cal) (median + IQR)
-    - Dunn/TargetReference TS_ref(f_full)
-    - TsRmsError(f_cal)
+• Multipanel figure (3×3) includes:
+
+Column 1:
+    (1) TS_full(f) from UnCFR (TargetReference axis)
+    (2) TS_full(f) from CFR (TargetReference axis)
+    (3) TargetReference TS(f)
+
+Column 2:
+    (4) TS_calgrid(f) from UnCFR
+    (5) TS_calgrid(f) from CFR
+    (6) Gain
+
+Column 3:
+    (7) BeamWidthAlongship
+    (8) BeamWidthAthwartship
+    (9) SaCorrection
+
+• All TS plots use y-limits [-70, -30] dB
 """
 
 import os
@@ -36,11 +47,14 @@ def parse_calibration_results(xml_path):
     """
     Returns:
         results: dict of CalibrationResults
-        hitdata: list of dicts, each containing CompensatedFrequencyResponse array
+        hitdata: list of dicts, each containing:
+            - CompensatedFrequencyResponse (CFR)
+            - UnCompensatedFrequencyResponse (UnCFR) if present
         channel_name: string or None
         target_ref: dict with keys:
             'Frequency' (np.ndarray) - full-resolution frequency axis
-            'Response' (np.ndarray)  - Dunn/target TS(f) on that axis
+            'Response' (np.ndarray)  - theoretical TS(f)
+            'Diameter' (float or None)
     """
 
     tree = ET.parse(xml_path)
@@ -68,13 +82,13 @@ def parse_calibration_results(xml_path):
                     arr = np.array([float(x) for x in parts])
                     results[elem.tag] = arr
                     continue
-                except:
+                except Exception:
                     pass
 
         # Scalar fallback
         try:
             results[elem.tag] = float(text)
-        except:
+        except Exception:
             results[elem.tag] = text
 
     # ---- TargetReference ----
@@ -83,102 +97,157 @@ def parse_calibration_results(xml_path):
     if tref is not None:
         f_node = tref.find("Frequency")
         r_node = tref.find("Response")
+        d_node = tref.find("Diameter")
+
         if f_node is not None and f_node.text:
             f_txt = f_node.text.replace(";", " ").replace(",", " ")
             f_parts = f_txt.split()
             if f_parts:
                 target_ref["Frequency"] = np.array([float(x) for x in f_parts])
+
         if r_node is not None and r_node.text:
             r_txt = r_node.text.replace(";", " ").replace(",", " ")
             r_parts = r_txt.split()
             if r_parts:
                 target_ref["Response"] = np.array([float(x) for x in r_parts])
 
+        if d_node is not None and d_node.text:
+            try:
+                target_ref["Diameter"] = float(d_node.text)
+            except Exception:
+                target_ref["Diameter"] = None
+        else:
+            target_ref["Diameter"] = None
+
     # ---- HitData blocks ----
     hitdata = []
     for hit in root.findall(".//HitData"):
         hd = {}
+
+        # CFR
         cfr = hit.find("CompensatedFrequencyResponse")
         if cfr is not None and cfr.text is not None:
             txt = cfr.text.replace(";", " ").replace(",", " ")
             parts = txt.split()
             if parts:
-                arr = np.array([float(x) for x in parts])
-                hd["CompensatedFrequencyResponse"] = arr
+                hd["CFR"] = np.array([float(x) for x in parts])
+
+        # UnCFR
+        uncfr = hit.find("UnCompensatedFrequencyResponse")
+        if uncfr is not None and uncfr.text is not None:
+            txt = uncfr.text.replace(";", " ").replace(",", " ")
+            parts = txt.split()
+            if parts:
+                hd["UnCFR"] = np.array([float(x) for x in parts])
+
         hitdata.append(hd)
 
     return results, hitdata, channel_name, target_ref
 
 
 # ---------------------------------------------------------
-# TS(f) FROM CFR USING TARGETREFERENCE AXIS
+# TS(f) FROM CFR OR UnCFR USING TARGETREFERENCE AXIS
 # ---------------------------------------------------------
 
-def compute_ts_from_cfr(cal, hitdata, target_ref):
+def compute_ts_from_array(arr_list, f_full):
     """
-    Compute TS_full(f_full) on TargetReference frequency axis,
-    then TS_calgrid(f_cal) on CalibrationResults frequency axis.
+    Given a list of arrays (CFR or UnCFR), compute TS_full(f_full)
+    using normalized sweep mapping.
 
     Returns:
-        f_full: np.ndarray or None
-        TS_full_median, TS_full_q25, TS_full_q75: np.ndarray or None
-        f_cal: np.ndarray or None
-        TS_cal_median, TS_cal_q25, TS_cal_q75: np.ndarray or None
+        TS_median, TS_q25, TS_q75 (or all None if not computable)
     """
 
-    freq_cal = cal.get("Frequency")
-    f_full = target_ref.get("Frequency") if target_ref is not None else None
+    if not arr_list or f_full is None:
+        return None, None, None
 
-    # Need both full-resolution frequency axis and calibration frequency axis
-    if not isinstance(freq_cal, np.ndarray) or freq_cal.size < 2:
-        return None, None, None, None, None, None, None, None
-    if f_full is None or not isinstance(f_full, np.ndarray) or f_full.size < 2:
-        return None, None, None, None, None, None, None, None
-
-    # Collect CFR arrays
-    raw_cfr = [hd["CompensatedFrequencyResponse"]
-               for hd in hitdata
-               if "CompensatedFrequencyResponse" in hd]
-
-    if not raw_cfr:
-        return f_full, None, None, None, freq_cal, None, None, None
-
-    lengths = [len(arr) for arr in raw_cfr]
+    lengths = [len(a) for a in arr_list]
     common_len = Counter(lengths).most_common(1)[0][0]
 
-    print(f"CFR length summary: min={min(lengths)}, max={max(lengths)}, "
-          f"median={np.median(lengths)}, mode={common_len}")
-
-    # CFR bins normalized 0..1
+    # CFR/UnCFR bins normalized 0..1
     cfr_x = np.linspace(0, 1, common_len)
 
     # Full-resolution frequency axis normalized 0..1
     f_full_norm = (f_full - f_full.min()) / (f_full.max() - f_full.min())
 
-    # Interpolate CFR onto full-resolution frequency axis
     TS_full_list = []
-    for arr in raw_cfr:
+    for arr in arr_list:
         if len(arr) == common_len:
             TS_full = np.interp(f_full_norm, cfr_x, arr)
             TS_full_list.append(TS_full)
 
     if not TS_full_list:
-        return f_full, None, None, None, freq_cal, None, None, None
+        return None, None, None
 
-    TS_full_stack = np.vstack(TS_full_list)
-    TS_full_median = np.median(TS_full_stack, axis=0)
-    TS_full_q25 = np.percentile(TS_full_stack, 25, axis=0)
-    TS_full_q75 = np.percentile(TS_full_stack, 75, axis=0)
+    TS_stack = np.vstack(TS_full_list)
+    TS_median = np.median(TS_stack, axis=0)
+    TS_q25 = np.percentile(TS_stack, 25, axis=0)
+    TS_q75 = np.percentile(TS_stack, 75, axis=0)
 
-    # Downsample TS_full to calibration frequency grid
-    TS_cal_median = np.interp(freq_cal, f_full, TS_full_median)
-    TS_cal_q25 = np.interp(freq_cal, f_full, TS_full_q25)
-    TS_cal_q75 = np.interp(freq_cal, f_full, TS_full_q75)
+    return TS_median, TS_q25, TS_q75
 
-    return (f_full,
-            TS_full_median, TS_full_q25, TS_full_q75,
-            freq_cal,
-            TS_cal_median, TS_cal_q25, TS_cal_q75)
+
+def compute_ts_all(cal, hitdata, target_ref):
+    """
+    Compute:
+        TS_full_CFR(f_full)
+        TS_calgrid_CFR(f_cal)
+        TS_full_UnCFR(f_full)
+        TS_calgrid_UnCFR(f_cal)
+
+    Returns dict with all arrays, or None if not computable.
+    """
+
+    freq_cal = cal.get("Frequency")
+    f_full = target_ref.get("Frequency") if target_ref else None
+
+    if not isinstance(freq_cal, np.ndarray) or freq_cal.size < 2:
+        return None
+
+    if f_full is None or not isinstance(f_full, np.ndarray) or f_full.size < 2:
+        return None
+
+    # Collect CFR and UnCFR arrays
+    CFR_list = [hd["CFR"] for hd in hitdata if "CFR" in hd]
+    UnCFR_list = [hd["UnCFR"] for hd in hitdata if "UnCFR" in hd]
+
+    # TS_full from CFR
+    TS_full_CFR, TS_full_CFR_q25, TS_full_CFR_q75 = compute_ts_from_array(CFR_list, f_full)
+
+    # TS_full from UnCFR
+    TS_full_UnCFR, TS_full_UnCFR_q25, TS_full_UnCFR_q75 = compute_ts_from_array(UnCFR_list, f_full)
+
+    # Downsample to calibration grid
+    if TS_full_CFR is not None:
+        TS_cal_CFR = np.interp(freq_cal, f_full, TS_full_CFR)
+        TS_cal_CFR_q25 = np.interp(freq_cal, f_full, TS_full_CFR_q25)
+        TS_cal_CFR_q75 = np.interp(freq_cal, f_full, TS_full_CFR_q75)
+    else:
+        TS_cal_CFR = TS_cal_CFR_q25 = TS_cal_CFR_q75 = None
+
+    if TS_full_UnCFR is not None:
+        TS_cal_UnCFR = np.interp(freq_cal, f_full, TS_full_UnCFR)
+        TS_cal_UnCFR_q25 = np.interp(freq_cal, f_full, TS_full_UnCFR_q25)
+        TS_cal_UnCFR_q75 = np.interp(freq_cal, f_full, TS_full_UnCFR_q75)
+    else:
+        TS_cal_UnCFR = TS_cal_UnCFR_q25 = TS_cal_UnCFR_q75 = None
+
+    return dict(
+        f_full=f_full,
+        freq_cal=freq_cal,
+        TS_full_CFR=TS_full_CFR,
+        TS_full_CFR_q25=TS_full_CFR_q25,
+        TS_full_CFR_q75=TS_full_CFR_q75,
+        TS_cal_CFR=TS_cal_CFR,
+        TS_cal_CFR_q25=TS_cal_CFR_q25,
+        TS_cal_CFR_q75=TS_cal_CFR_q75,
+        TS_full_UnCFR=TS_full_UnCFR,
+        TS_full_UnCFR_q25=TS_full_UnCFR_q25,
+        TS_full_UnCFR_q75=TS_full_UnCFR_q75,
+        TS_cal_UnCFR=TS_cal_UnCFR,
+        TS_cal_UnCFR_q25=TS_cal_UnCFR_q25,
+        TS_cal_UnCFR_q75=TS_cal_UnCFR_q75
+    )
 
 
 # ---------------------------------------------------------
@@ -192,6 +261,18 @@ def describe_array(arr):
         "sd": np.std(arr),
         "iqr": iqr(arr)
     }
+
+
+def fmt(param, value):
+    if param == "PulseLength":
+        return f"{value:.6f}"
+    if param in ("SaCorrection", "TsRmsError"):
+        return f"{value:.4f}"
+    return f"{value:.2f}"
+
+
+def fmt_stats(param, stats):
+    return {k: fmt(param, v) for k, v in stats.items()}
 
 
 def summarize_cw(cal, channel_name):
@@ -213,19 +294,18 @@ def summarize_fm(cal, hitdata, channel_name, target_ref):
             stats = describe_array(val)
             rows.append([key, fmt_stats(key, stats)])
 
-    # TS_full and TS_calgrid summaries
-    (f_full,
-     TS_full_median, TS_full_q25, TS_full_q75,
-     f_cal,
-     TS_cal_median, TS_cal_q25, TS_cal_q75) = compute_ts_from_cfr(cal, hitdata, target_ref)
+    # TS summaries
+    ts = compute_ts_all(cal, hitdata, target_ref)
+    if ts is not None:
+        if ts["TS_full_CFR"] is not None:
+            rows.append(["TS_full_CFR_median", ts["TS_full_CFR"]])
+        if ts["TS_cal_CFR"] is not None:
+            rows.append(["TS_cal_CFR_median", ts["TS_cal_CFR"]])
 
-    if TS_full_median is not None:
-        rows.append(["TS_full_median", TS_full_median])
-        rows.append(["TS_full_IQR", TS_full_q75 - TS_full_q25])
-
-    if TS_cal_median is not None:
-        rows.append(["TS_calgrid_median", TS_cal_median])
-        rows.append(["TS_calgrid_IQR", TS_cal_q75 - TS_cal_q25])
+        if ts["TS_full_UnCFR"] is not None:
+            rows.append(["TS_full_UnCFR_median", ts["TS_full_UnCFR"]])
+        if ts["TS_cal_UnCFR"] is not None:
+            rows.append(["TS_cal_UnCFR_median", ts["TS_cal_UnCFR"]])
 
     df = pd.DataFrame(rows, columns=["Parameter", "Statistics"])
     df.loc[len(df)] = ["ChannelName", channel_name]
@@ -233,56 +313,21 @@ def summarize_fm(cal, hitdata, channel_name, target_ref):
 
 
 # ---------------------------------------------------------
-# CFR DEBUG PLOT
-# ---------------------------------------------------------
-
-def plot_cfr_index_debug(hitdata, ax=None):
-    raw_cfr = [hd["CompensatedFrequencyResponse"]
-               for hd in hitdata
-               if "CompensatedFrequencyResponse" in hd]
-
-    if not raw_cfr:
-        if ax is None:
-            print("No CFR arrays found.")
-        return
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-    max_curves = 20
-    n_curves = min(len(raw_cfr), max_curves)
-
-    for i in range(n_curves):
-        arr = raw_cfr[i]
-        ax.plot(np.arange(len(arr)), arr, alpha=0.25, lw=0.8, color="tab:green")
-
-    ax.set_title("CFR Diagnostic — First 20 CFR Arrays vs Index")
-    ax.set_xlabel("FFT Bin Index")
-    ax.set_ylabel("TS (dB)")
-    ax.grid(True, alpha=0.3)
-
-
-# ---------------------------------------------------------
 # PLOTTING
 # ---------------------------------------------------------
 
 def plot_fm(cal, hitdata, channel_name, target_ref, out_prefix):
-    freq_cal = cal.get("Frequency")
-    if not isinstance(freq_cal, np.ndarray) or freq_cal.size < 2:
-        print("FM plot skipped: CalibrationResults Frequency missing or invalid")
+    ts = compute_ts_all(cal, hitdata, target_ref)
+    if ts is None:
+        print("TS computation failed.")
         return
 
-    pulse = cal.get("PulseLength", None)
+    f_full = ts["f_full"]
+    f_cal = ts["freq_cal"]
 
-    # Compute TS_full and TS_calgrid
-    (f_full,
-     TS_full_median, TS_full_q25, TS_full_q75,
-     f_cal,
-     TS_cal_median, TS_cal_q25, TS_cal_q75) = compute_ts_from_cfr(cal, hitdata, target_ref)
-
-    # TargetReference TS(f)
-    tref_freq = target_ref.get("Frequency") if target_ref is not None else None
-    tref_resp = target_ref.get("Response") if target_ref is not None else None
+    tref_freq = target_ref.get("Frequency") if target_ref else None
+    tref_resp = target_ref.get("Response") if target_ref else None
+    tref_diam = target_ref.get("Diameter") if target_ref else None
 
     # ---------------------------------------------------------
     # MAIN MULTI-PANEL FIGURE (3×3)
@@ -290,124 +335,234 @@ def plot_fm(cal, hitdata, channel_name, target_ref, out_prefix):
     fig, axes = plt.subplots(3, 3, figsize=(18, 12))
     axes = axes.flatten()
 
-    # Panel 0: Gain(f)
+    # ---------------------------------------------------------
+    # Column 1
+    # ---------------------------------------------------------
+
+    # Panel 1: TS_full from UnCFR vs frequency (median + IQR)
     ax = axes[0]
+    if ts["TS_full_UnCFR"] is not None:
+        # dashed blue median
+        ax.plot(f_full, ts["TS_full_UnCFR"], lw=2, color="tab:blue",
+                linestyle="--", label="Median TS_full(UnCFR)")
+
+        # IQR shading
+        ax.fill_between(
+            f_full,
+            ts["TS_full_UnCFR_q25"],
+            ts["TS_full_UnCFR_q75"],
+            alpha=0.3,
+            color="tab:blue",
+            label="IQR"
+        )
+
+        # TargetReference overlay (solid orange)
+        if tref_freq is not None and tref_resp is not None:
+            ax.plot(tref_freq, tref_resp, lw=2, color="tab:orange",
+                    label="TargetReference")
+
+        ax.set_title("TS_full(f) from UnCFR (TargetReference axis)")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("TS (dB)")
+        ax.set_ylim([-70, -30])
+        ax.grid(True)
+        ax.legend()
+    else:
+        ax.set_title("TS_full(UnCFR) (missing)")
+
+    # Panel 2: TS_full from CFR vs frequency (median + IQR)
+    ax = axes[1]
+    if ts["TS_full_CFR"] is not None:
+        # dashed blue median
+        ax.plot(f_full, ts["TS_full_CFR"], lw=2, color="tab:blue",
+                linestyle="--", label="Median TS_full(CFR)")
+
+        # IQR shading
+        ax.fill_between(
+            f_full,
+            ts["TS_full_CFR_q25"],
+            ts["TS_full_CFR_q75"],
+            alpha=0.3,
+            color="tab:blue",
+            label="IQR"
+        )
+
+        # TargetReference overlay (solid orange)
+        if tref_freq is not None and tref_resp is not None:
+            ax.plot(tref_freq, tref_resp, lw=2, color="tab:orange",
+                    label="TargetReference")
+
+        ax.set_title("TS_full(f) from CFR (TargetReference axis)")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("TS (dB)")
+        ax.set_ylim([-70, -30])
+        ax.grid(True)
+        ax.legend()
+    else:
+        ax.set_title("TS_full(CFR) (missing)")
+
+    # # Panel 1: TS_full from UnCFR vs frequency (median + IQR)
+    # ax = axes[0]
+    # if ts["TS_full_UnCFR"] is not None:
+    #     ax.plot(f_full, ts["TS_full_UnCFR"], lw=2, label="Median TS_full(UnCFR)")
+    #     ax.fill_between(
+    #         f_full,
+    #         ts["TS_full_UnCFR_q25"],
+    #         ts["TS_full_UnCFR_q75"],
+    #         alpha=0.3,
+    #         label="IQR"
+    #     )
+    #     ax.set_title("TS_full(f) from UnCFR (TargetReference axis)")
+    #     ax.set_xlabel("Frequency (Hz)")
+    #     ax.set_ylabel("TS (dB)")
+    #     ax.set_ylim([-70, -30])
+    #     ax.grid(True)
+    #     ax.legend()
+    # else:
+    #     ax.set_title("TS_full(UnCFR) (missing)")
+
+    # # Panel 2: TS_full from CFR vs frequency (median + IQR)
+    # ax = axes[1]
+    # if ts["TS_full_CFR"] is not None:
+    #     ax.plot(f_full, ts["TS_full_CFR"], lw=2, label="Median TS_full(CFR)")
+    #     ax.fill_between(
+    #         f_full,
+    #         ts["TS_full_CFR_q25"],
+    #         ts["TS_full_CFR_q75"],
+    #         alpha=0.3,
+    #         label="IQR"
+    #     )
+    #     ax.set_title("TS_full(f) from CFR (TargetReference axis)")
+    #     ax.set_xlabel("Frequency (Hz)")
+    #     ax.set_ylabel("TS (dB)")
+    #     ax.set_ylim([-70, -30])
+    #     ax.grid(True)
+    #     ax.legend()
+    # else:
+    #     ax.set_title("TS_full(CFR) (missing)")
+
+    # Panel 3: TargetReference TS(f)
+    ax = axes[2]
+    if tref_freq is not None and tref_resp is not None:
+        ax.plot(tref_freq, tref_resp, lw=2, color="tab:orange")
+        ax.set_title("TargetReference")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("TS (dB)")
+        ax.set_ylim([-70, -30])
+        ax.grid(True)
+    else:
+        ax.set_title("TargetReference (missing)")
+
+    # ---------------------------------------------------------
+    # Column 2
+    # ---------------------------------------------------------
+
+    # Panel 4: TS_calgrid from UnCFR
+    ax = axes[3]
+    if ts["TS_cal_UnCFR"] is not None:
+        ax.plot(f_cal, ts["TS_cal_UnCFR"], lw=2, label="Median TS_cal(UnCFR)")
+        ax.fill_between(
+            f_cal,
+            ts["TS_cal_UnCFR_q25"],
+            ts["TS_cal_UnCFR_q75"],
+            alpha=0.3
+        )
+        ax.set_title("TS_calgrid(f) from UnCFR")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("TS (dB)")
+        ax.set_ylim([-70, -30])
+        ax.grid(True)
+        ax.legend()
+    else:
+        ax.set_title("TS_calgrid(UnCFR) (missing)")
+
+    # Panel 5: TS_calgrid from CFR
+    ax = axes[4]
+    if ts["TS_cal_CFR"] is not None:
+        ax.plot(f_cal, ts["TS_cal_CFR"], lw=2, label="Median TS_cal(CFR)")
+        ax.fill_between(
+            f_cal,
+            ts["TS_cal_CFR_q25"],
+            ts["TS_cal_CFR_q75"],
+            alpha=0.3
+        )
+        ax.set_title("TS_calgrid(f) from CFR")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("TS (dB)")
+        ax.set_ylim([-70, -30])
+        ax.grid(True)
+        ax.legend()
+    else:
+        ax.set_title("TS_calgrid(CFR) (missing)")
+
+    # Panel 6: Gain
+    ax = axes[5]
     if "Gain" in cal and isinstance(cal["Gain"], np.ndarray):
-        ax.plot(freq_cal, cal["Gain"], lw=2)
+        ax.plot(f_cal, cal["Gain"], lw=2)
         ax.set_title("Gain")
         ax.set_xlabel("Frequency (Hz)")
         ax.grid(True)
     else:
         ax.set_title("Gain (missing)")
 
-    # Panel 1: SaCorrection(f)
-    ax = axes[1]
-    if "SaCorrection" in cal and isinstance(cal["SaCorrection"], np.ndarray):
-        ax.plot(freq_cal, cal["SaCorrection"], lw=2)
-        ax.set_title("SaCorrection")
-        ax.set_xlabel("Frequency (Hz)")
-        ax.grid(True)
-    else:
-        ax.set_title("SaCorrection (missing)")
+    # ---------------------------------------------------------
+    # Column 3
+    # ---------------------------------------------------------
 
-    # Panel 2: CFR vs index
-    ax = axes[2]
-    plot_cfr_index_debug(hitdata, ax=ax)
-
-    # Panel 3: TS_full(f_full) median + IQR
-    ax = axes[3]
-    if TS_full_median is not None and f_full is not None:
-        ax.plot(f_full, TS_full_median, lw=2, label="Median TS_full(f)")
-        ax.fill_between(f_full, TS_full_q25, TS_full_q75, alpha=0.3, label="IQR")
-        ax.set_title("TS_full(f) from CFR (TargetReference axis)")
-        ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("TS (dB)")
-        ax.grid(True)
-        ax.legend()
-    else:
-        ax.set_title("TS_full(f) (missing)")
-
-    # Panel 4: TS_calgrid(f_cal) median + IQR
-    ax = axes[4]
-    if TS_cal_median is not None and f_cal is not None:
-        ax.plot(f_cal, TS_cal_median, lw=2, label="Median TS_calgrid(f)")
-        ax.fill_between(f_cal, TS_cal_q25, TS_cal_q75, alpha=0.3, label="IQR")
-        ax.set_title("TS_calgrid(f) from CFR (CalibrationResults axis)")
-        ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("TS (dB)")
-        ax.grid(True)
-        ax.legend()
-    else:
-        ax.set_title("TS_calgrid(f) (missing)")
-
-    # Panel 5: TargetReference TS(f)
-    ax = axes[5]
-    if tref_freq is not None and tref_resp is not None:
-        ax.plot(tref_freq, tref_resp, lw=2, color="tab:orange", label="TargetReference TS(f)")
-        ax.set_title("TargetReference TS(f)")
-        ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("TS (dB)")
-        ax.grid(True)
-        ax.legend()
-    else:
-        ax.set_title("TargetReference TS(f) (missing)")
-
-    # Panel 6: BeamWidthAlongship
+    # Panel 7: BeamWidthAlongship
     ax = axes[6]
     if "BeamWidthAlongship" in cal and isinstance(cal["BeamWidthAlongship"], np.ndarray):
-        ax.plot(freq_cal, cal["BeamWidthAlongship"], lw=2)
+        ax.plot(f_cal, cal["BeamWidthAlongship"], lw=2)
         ax.set_title("BeamWidthAlongship")
         ax.set_xlabel("Frequency (Hz)")
         ax.grid(True)
     else:
         ax.set_title("BeamWidthAlongship (missing)")
 
-    # Panel 7: BeamWidthAthwartship
+    # Panel 8: BeamWidthAthwartship
     ax = axes[7]
     if "BeamWidthAthwartship" in cal and isinstance(cal["BeamWidthAthwartship"], np.ndarray):
-        ax.plot(freq_cal, cal["BeamWidthAthwartship"], lw=2)
+        ax.plot(f_cal, cal["BeamWidthAthwartship"], lw=2)
         ax.set_title("BeamWidthAthwartship")
         ax.set_xlabel("Frequency (Hz)")
         ax.grid(True)
     else:
         ax.set_title("BeamWidthAthwartship (missing)")
 
-    # Panel 8: TsRmsError
+    # Panel 9: SaCorrection
     ax = axes[8]
-    if "TsRmsError" in cal and isinstance(cal["TsRmsError"], np.ndarray):
-        ax.plot(freq_cal, cal["TsRmsError"], lw=2)
-        ax.set_title("TsRmsError")
+    if "SaCorrection" in cal and isinstance(cal["SaCorrection"], np.ndarray):
+        ax.plot(f_cal, cal["SaCorrection"], lw=2)
+        ax.set_title("SaCorrection")
         ax.set_xlabel("Frequency (Hz)")
-        ax.set_ylabel("TsRmsError")
         ax.grid(True)
     else:
-        ax.set_title("TsRmsError (missing)")
+        ax.set_title("SaCorrection (missing)")
 
-    # ---- Title with ChannelName + PulseLength ----
+    # ---- Title with ChannelName + PulseLength + Diameter ----
+    pulse = cal.get("PulseLength", None)
+    diam = tref_diam
+
     if pulse is not None and isinstance(pulse, float):
-        fig.suptitle(f"FM Calibration — {channel_name} — PulseLength = {pulse:.6f} s")
+        if diam is not None:
+            fig.suptitle(
+                f"FM Calibration — {channel_name} — PulseLength = {pulse:.6f} s — Diameter = {diam:.3f} mm"
+            )
+        else:
+            fig.suptitle(
+                f"FM Calibration — {channel_name} — PulseLength = {pulse:.6f} s"
+            )
     else:
-        fig.suptitle(f"FM Calibration — {channel_name}")
+        if diam is not None:
+            fig.suptitle(
+                f"FM Calibration — {channel_name} — Diameter = {diam:.3f} mm"
+            )
+        else:
+            fig.suptitle(f"FM Calibration — {channel_name}")
 
     plt.tight_layout()
     plt.savefig(f"{out_prefix}_fm_main.png", dpi=150)
     plt.close()
-
-
-# ---------------------------------------------------------
-# FORMATTING HELPERS
-# ---------------------------------------------------------
-
-def fmt(param, value):
-    if param == "PulseLength":
-        return f"{value:.6f}"
-    if param in ("SaCorrection", "TsRmsError"):
-        return f"{value:.4f}"
-    return f"{value:.2f}"
-
-
-def fmt_stats(param, stats):
-    return {k: fmt(param, v) for k, v in stats.items()}
 
 
 # ---------------------------------------------------------
@@ -455,9 +610,9 @@ def process_directory(directory):
 # RUN
 # ---------------------------------------------------------
 
-import sys
-
 if __name__ == "__main__":
+    import sys
+
     target = sys.argv[1] if len(sys.argv) > 1 else "./xml_files"
 
     if os.path.isdir(target):
@@ -468,4 +623,3 @@ if __name__ == "__main__":
         process_file(target, out_dir)
     else:
         print(f"Invalid path: {target}")
-
