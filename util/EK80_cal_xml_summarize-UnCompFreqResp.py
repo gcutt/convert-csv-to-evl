@@ -5,13 +5,13 @@ EK80_cal_xml_summarize.py
 • Handles CW and FM
 • Extracts ChannelName
 • Uses TargetReference Frequency/Response for full-resolution TS(f)
-• CFR → TS_full(f_full) on TargetReference frequency axis
+• UnCFR → TS_full(f_full) on TargetReference frequency axis
 • TS_full(f_full) → TS_calgrid(f_cal) on CalibrationResults frequency axis
 • Computes median + IQR across hits
 • Multipanel figure includes:
     - Gain(f), SaCorrection(f)
     - BeamWidthAlongship(f), BeamWidthAthwartship(f)
-    - CFR vs index
+    - UnCFR vs index
     - TS_full(f_full) (median + IQR)
     - TS_calgrid(f_cal) (median + IQR)
     - Dunn/TargetReference TS_ref(f_full)
@@ -36,7 +36,7 @@ def parse_calibration_results(xml_path):
     """
     Returns:
         results: dict of CalibrationResults
-        hitdata: list of dicts, each containing CompensatedFrequencyResponse array
+        hitdata: list of dicts, each containing UnCompensatedFrequencyResponse array
         channel_name: string or None
         target_ref: dict with keys:
             'Frequency' (np.ndarray) - full-resolution frequency axis
@@ -98,20 +98,20 @@ def parse_calibration_results(xml_path):
     hitdata = []
     for hit in root.findall(".//HitData"):
         hd = {}
-        cfr = hit.find("CompensatedFrequencyResponse")
+        cfr = hit.find("UnCompensatedFrequencyResponse")
         if cfr is not None and cfr.text is not None:
             txt = cfr.text.replace(";", " ").replace(",", " ")
             parts = txt.split()
             if parts:
                 arr = np.array([float(x) for x in parts])
-                hd["CompensatedFrequencyResponse"] = arr
+                hd["UnCompensatedFrequencyResponse"] = arr
         hitdata.append(hd)
 
     return results, hitdata, channel_name, target_ref
 
 
 # ---------------------------------------------------------
-# TS(f) FROM CFR USING TARGETREFERENCE AXIS
+# TS(f) FROM UnCFR USING TARGETREFERENCE AXIS
 # ---------------------------------------------------------
 
 def compute_ts_from_cfr(cal, hitdata, target_ref):
@@ -135,10 +135,10 @@ def compute_ts_from_cfr(cal, hitdata, target_ref):
     if f_full is None or not isinstance(f_full, np.ndarray) or f_full.size < 2:
         return None, None, None, None, None, None, None, None
 
-    # Collect CFR arrays
-    raw_cfr = [hd["CompensatedFrequencyResponse"]
+    # Collect UnCFR arrays
+    raw_cfr = [hd["UnCompensatedFrequencyResponse"]
                for hd in hitdata
-               if "CompensatedFrequencyResponse" in hd]
+               if "UnCompensatedFrequencyResponse" in hd]
 
     if not raw_cfr:
         return f_full, None, None, None, freq_cal, None, None, None
@@ -146,7 +146,7 @@ def compute_ts_from_cfr(cal, hitdata, target_ref):
     lengths = [len(arr) for arr in raw_cfr]
     common_len = Counter(lengths).most_common(1)[0][0]
 
-    print(f"CFR length summary: min={min(lengths)}, max={max(lengths)}, "
+    print(f"UnCFR length summary: min={min(lengths)}, max={max(lengths)}, "
           f"median={np.median(lengths)}, mode={common_len}")
 
     # CFR bins normalized 0..1
@@ -155,7 +155,7 @@ def compute_ts_from_cfr(cal, hitdata, target_ref):
     # Full-resolution frequency axis normalized 0..1
     f_full_norm = (f_full - f_full.min()) / (f_full.max() - f_full.min())
 
-    # Interpolate CFR onto full-resolution frequency axis
+    # Interpolate UnCFR onto full-resolution frequency axis
     TS_full_list = []
     for arr in raw_cfr:
         if len(arr) == common_len:
@@ -233,17 +233,17 @@ def summarize_fm(cal, hitdata, channel_name, target_ref):
 
 
 # ---------------------------------------------------------
-# CFR DEBUG PLOT
+# UnCFR DEBUG PLOT
 # ---------------------------------------------------------
 
 def plot_cfr_index_debug(hitdata, ax=None):
-    raw_cfr = [hd["CompensatedFrequencyResponse"]
+    raw_cfr = [hd["UnCompensatedFrequencyResponse"]
                for hd in hitdata
-               if "CompensatedFrequencyResponse" in hd]
+               if "UnCompensatedFrequencyResponse" in hd]
 
     if not raw_cfr:
         if ax is None:
-            print("No CFR arrays found.")
+            print("No UnCFR arrays found.")
         return
 
     if ax is None:
@@ -256,7 +256,7 @@ def plot_cfr_index_debug(hitdata, ax=None):
         arr = raw_cfr[i]
         ax.plot(np.arange(len(arr)), arr, alpha=0.25, lw=0.8, color="tab:green")
 
-    ax.set_title("CFR Diagnostic — First 20 CFR Arrays vs Index")
+    ax.set_title("UnCFR Diagnostic — First 20 CFR Arrays vs Index")
     ax.set_xlabel("FFT Bin Index")
     ax.set_ylabel("TS (dB)")
     ax.grid(True, alpha=0.3)
@@ -310,7 +310,7 @@ def plot_fm(cal, hitdata, channel_name, target_ref, out_prefix):
     else:
         ax.set_title("SaCorrection (missing)")
 
-    # Panel 2: CFR vs index
+    # Panel 2: UnCFR vs index
     ax = axes[2]
     plot_cfr_index_debug(hitdata, ax=ax)
 
@@ -319,7 +319,7 @@ def plot_fm(cal, hitdata, channel_name, target_ref, out_prefix):
     if TS_full_median is not None and f_full is not None:
         ax.plot(f_full, TS_full_median, lw=2, label="Median TS_full(f)")
         ax.fill_between(f_full, TS_full_q25, TS_full_q75, alpha=0.3, label="IQR")
-        ax.set_title("TS_full(f) from CFR (TargetReference axis)")
+        ax.set_title("TS_full(f) from UnCFR (TargetReference axis)")
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("TS (dB)")
         ax.grid(True)
@@ -332,7 +332,7 @@ def plot_fm(cal, hitdata, channel_name, target_ref, out_prefix):
     if TS_cal_median is not None and f_cal is not None:
         ax.plot(f_cal, TS_cal_median, lw=2, label="Median TS_calgrid(f)")
         ax.fill_between(f_cal, TS_cal_q25, TS_cal_q75, alpha=0.3, label="IQR")
-        ax.set_title("TS_calgrid(f) from CFR (CalibrationResults axis)")
+        ax.set_title("TS_calgrid(f) from UnCFR (CalibrationResults axis)")
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("TS (dB)")
         ax.grid(True)
